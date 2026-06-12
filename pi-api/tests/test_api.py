@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import os
 import uuid
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 os.environ["PIHOUSE_CONFIG"] = "config.example.json"
+
+from pihouse_api.auth import TOKEN_ENV_KEY, load_token  # noqa: E402
+
+os.environ[TOKEN_ENV_KEY] = "dev-phase3-token"
 
 from pihouse_api.app import app  # noqa: E402
 
@@ -30,6 +35,16 @@ def test_status_requires_bearer() -> None:
     assert response.status_code == 401
     assert response.headers["www-authenticate"] == "Bearer"
     assert response.json()["error"]["details"]["reason"] == "missing_or_invalid_bearer_token"
+
+
+def test_token_can_come_from_env_file(tmp_path, monkeypatch) -> None:
+    config = app.state.config.model_copy()
+    config.tokenFile = str(tmp_path / "fallback.token")
+    Path(config.tokenFile).write_text("fallback-token", encoding="utf-8")
+    (tmp_path / ".env").write_text(f"{TOKEN_ENV_KEY}=env-file-token\n", encoding="utf-8")
+    monkeypatch.delenv(TOKEN_ENV_KEY, raising=False)
+
+    assert load_token(config) == "env-file-token"
 
 
 def test_status_with_bearer_exposes_allowlisted_stub_state() -> None:

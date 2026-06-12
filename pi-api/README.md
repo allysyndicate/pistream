@@ -15,13 +15,22 @@ $env:PIHOUSE_CONFIG="config.example.json"
 .\.venv\Scripts\python -m uvicorn pihouse_api.app:app --host 127.0.0.1 --port 8765
 ```
 
-The example bearer token is in `token.example` and is intentionally only for
-local scaffold testing.
+For local testing, place the bearer token in `.env`:
+
+```text
+PISTREAM_API_TOKEN=<api-token>
+```
+
+The service also accepts `PISTREAM_API_TOKEN` from the process environment. If
+neither is set, it falls back to the configured `tokenFile`. The example bearer
+token is in `token.example` and is intentionally only for local scaffold
+testing.
 
 ```powershell
 curl http://127.0.0.1:8765/api/v1/identity
 curl http://127.0.0.1:8765/api/v1/health
-curl -H "Authorization: Bearer dev-phase3-token" http://127.0.0.1:8765/api/v1/status
+$token = (Get-Content .env | Where-Object { $_ -match '^PISTREAM_API_TOKEN=' }) -replace '^PISTREAM_API_TOKEN=', ''
+curl -H "Authorization: Bearer $token" http://127.0.0.1:8765/api/v1/status
 ```
 
 ## Run On A Raspberry Pi
