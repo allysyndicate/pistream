@@ -2,6 +2,7 @@ package com.pistream.companion.data
 
 import com.pistream.companion.data.dto.OperationRequestDto
 import com.pistream.companion.data.dto.OperationDto
+import com.pistream.companion.data.dto.PairingRequestDto
 import com.pistream.companion.data.dto.SetSpeakerSystemsRequestDto
 import com.pistream.companion.domain.BluetoothDeviceModel
 import com.pistream.companion.domain.ConnectionResult
@@ -21,7 +22,38 @@ class PiRepository(
 ) {
     suspend fun initialHost(): String = savedPiStore.savedPi.first()?.host ?: DEFAULT_HOST
 
+    suspend fun hasSavedPi(): Boolean = savedPiStore.savedPi.first()?.identity != null
+
     fun savedToken(): String = tokenStore.loadToken()
+
+    suspend fun forgetPi() {
+        tokenStore.clearToken()
+        savedPiStore.forget()
+    }
+
+    suspend fun requestPairingToken(host: String, clientInstanceId: String): PairingAttempt {
+        val baseUrl = piBaseUrl(host)
+        return try {
+            when (val result = apiClient.requestPairingToken(
+                baseUrl,
+                PairingRequestDto(
+                    clientName = "PiStream Companion",
+                    clientInstanceId = clientInstanceId
+                )
+            )) {
+                is ApiCallResult.Success -> PairingAttempt.Issued(result.value.token)
+                is ApiCallResult.Failure -> when (result.code) {
+                    "not_found" -> PairingAttempt.NotSupported
+                    "forbidden" -> PairingAttempt.WindowClosed
+                    else -> PairingAttempt.Failed("${result.code}: ${result.message}")
+                }
+            }
+        } catch (exception: IOException) {
+            PairingAttempt.Failed("Could not reach the Pi at $host.")
+        } catch (exception: Exception) {
+            PairingAttempt.Failed(exception.message ?: "Pairing failed.")
+        }
+    }
 
     suspend fun connect(hostInput: String, tokenInput: String): ConnectionResult {
         val host = normalizePiHost(hostInput)
@@ -221,6 +253,13 @@ data class BluetoothScanResult(
     val message: String,
     val devices: List<BluetoothDeviceModel>?
 )
+
+sealed interface PairingAttempt {
+    data class Issued(val token: String) : PairingAttempt
+    data object NotSupported : PairingAttempt
+    data object WindowClosed : PairingAttempt
+    data class Failed(val message: String) : PairingAttempt
+}
 
 private fun DashboardModel.operationRequest(
     speakerId: String? = null,

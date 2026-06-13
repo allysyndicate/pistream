@@ -45,6 +45,10 @@ class SavedPiStore(private val context: Context) {
             prefs[Keys.ControllerInstanceId] = identity.controllerInstanceId
         }
     }
+
+    suspend fun forget() {
+        context.savedPiDataStore.edit { prefs -> prefs.clear() }
+    }
 }
 
 data class SavedPi(

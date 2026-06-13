@@ -3,243 +3,324 @@ package com.pistream.companion.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.pistream.companion.data.BluetoothScanResult
 import com.pistream.companion.data.OperationActionResult
+import com.pistream.companion.data.PairingAttempt
+import com.pistream.companion.data.PiNetworkDiscoverer
 import com.pistream.companion.data.PiRepository
-import com.pistream.companion.domain.BluetoothDeviceModel
 import com.pistream.companion.domain.ConnectionResult
 import com.pistream.companion.domain.DashboardModel
+import com.pistream.companion.domain.DiscoveredPi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
-class MainViewModel(private val repository: PiRepository) : ViewModel() {
-    private val _state = MutableStateFlow(PiUiState())
-    val state: StateFlow<PiUiState> = _state.asStateFlow()
+class MainViewModel(
+    private val repository: PiRepository,
+    private val discoverer: PiNetworkDiscoverer,
+    private val clientInstanceId: String
+) : ViewModel() {
+    private val _state = MutableStateFlow(HomeUiState())
+    val state: StateFlow<HomeUiState> = _state.asStateFlow()
+
+    private var discoveryJob: Job? = null
 
     init {
+        bootstrap()
+    }
+
+    private fun bootstrap() {
         viewModelScope.launch {
-            _state.update {
-                it.copy(
-                    host = repository.initialHost(),
-                    token = repository.savedToken()
+            if (!repository.hasSavedPi()) {
+                _state.update { it.copy(stage = HomeStage.Empty) }
+                return@launch
+            }
+            val host = repository.initialHost()
+            val token = repository.savedToken()
+            if (token.isBlank()) {
+                _state.update {
+                    it.copy(
+                        stage = HomeStage.ConnectionFailed,
+                        savedHost = host,
+                        statusMessage = "Saved Pi has no stored pairing token. Forget the Pi and pair again."
+                    )
+                }
+                return@launch
+            }
+            attemptConnect(host, token)
+        }
+    }
+
+    private suspend fun attemptConnect(host: String, token: String) {
+        _state.update { it.copy(stage = HomeStage.Connecting, savedHost = host, statusMessage = null) }
+        val result = repository.connect(host, token)
+        applyConnectionResult(host, result)
+    }
+
+    private fun applyConnectionResult(host: String, result: ConnectionResult) {
+        _state.update { current ->
+            when (result) {
+                is ConnectionResult.FoundHealthy -> current.copy(
+                    stage = HomeStage.Connected,
+                    savedHost = host,
+                    dashboard = result.dashboard,
+                    statusMessage = null
+                )
+                is ConnectionResult.FoundUnhealthy -> current.copy(
+                    stage = HomeStage.Connected,
+                    savedHost = host,
+                    dashboard = result.dashboard,
+                    statusMessage = "Pi is reachable but reports degraded health."
+                )
+                is ConnectionResult.WrongDevice -> current.copy(
+                    stage = HomeStage.ConnectionFailed,
+                    savedHost = host,
+                    statusMessage = "Host $host now reports a different Pi identity. Forget this Pi to pair the new one."
+                )
+                is ConnectionResult.Unauthorized -> current.copy(
+                    stage = HomeStage.ConnectionFailed,
+                    savedHost = host,
+                    statusMessage = "Pi rejected the saved pairing token. Forget this Pi and pair again."
+                )
+                is ConnectionResult.ApiUnavailable -> current.copy(
+                    stage = HomeStage.ConnectionFailed,
+                    savedHost = host,
+                    statusMessage = "Could not reach $host: ${result.cause}"
+                )
+                ConnectionResult.NotFound -> current.copy(
+                    stage = HomeStage.ConnectionFailed,
+                    savedHost = host,
+                    statusMessage = "Could not reach $host on this network. Make sure the Pi is online and on the same Wi-Fi."
                 )
             }
         }
     }
 
-    fun updateHost(host: String) {
-        _state.update { it.copy(host = host) }
-    }
-
-    fun updateToken(token: String) {
-        _state.update { it.copy(token = token) }
-    }
-
-    fun connect() {
+    fun retrySavedConnection() {
+        val host = state.value.savedHost ?: return
+        val token = repository.savedToken()
         viewModelScope.launch {
-            _state.update { it.copy(isLoading = true, message = null) }
-            val result = repository.connect(state.value.host, state.value.token)
-            _state.update {
-                when (result) {
-                    is ConnectionResult.FoundHealthy -> it.copy(
-                        isLoading = false,
-                        connectionLabel = "pi_service_healthy",
-                        dashboard = result.dashboard,
-                        message = result.dashboard.unconfirmedSpeakerStateMessage()
+            if (token.isBlank()) {
+                _state.update {
+                    it.copy(
+                        stage = HomeStage.ConnectionFailed,
+                        statusMessage = "No pairing token stored. Forget this Pi and pair again."
                     )
-                    is ConnectionResult.FoundUnhealthy -> it.copy(
-                        isLoading = false,
-                        connectionLabel = "pi_service_degraded",
-                        dashboard = result.dashboard,
-                        message = listOfNotNull(
-                            "Pi is reachable but reports degraded service health.",
-                            result.dashboard.unconfirmedSpeakerStateMessage()
-                        ).joinToString("\n")
-                    )
-                    is ConnectionResult.WrongDevice -> it.copy(
-                        isLoading = false,
-                        connectionLabel = "wrong_device",
-                        dashboard = null,
-                        message = "Host ${result.host} does not match the saved Pi identity."
-                    )
-                    is ConnectionResult.ApiUnavailable -> it.copy(
-                        isLoading = false,
-                        connectionLabel = "api_unavailable",
-                        dashboard = null,
-                        message = result.cause
-                    )
-                    is ConnectionResult.Unauthorized -> it.copy(
-                        isLoading = false,
-                        connectionLabel = "unauthorized",
-                        dashboard = null,
-                        message = "Bearer token was rejected. Re-enter the Pi token and retry."
-                    )
-                    ConnectionResult.NotFound -> it.copy(
-                        isLoading = false,
-                        connectionLabel = "not_found",
-                        dashboard = null,
-                        message = "No Pi API responded at the saved, default, or entered host."
+                }
+                return@launch
+            }
+            attemptConnect(host, token)
+        }
+    }
+
+    fun startConnectFlow() {
+        _state.update {
+            it.copy(
+                stage = HomeStage.Discovering,
+                discoveredPis = emptyList(),
+                pairing = null,
+                manualHostInput = "",
+                manualTokenInput = "",
+                statusMessage = null
+            )
+        }
+        startDiscovery()
+    }
+
+    fun cancelConnectFlow() {
+        stopDiscovery()
+        viewModelScope.launch {
+            val nextStage = if (repository.hasSavedPi()) HomeStage.Connecting else HomeStage.Empty
+            _state.update { it.copy(stage = nextStage, pairing = null) }
+            if (nextStage == HomeStage.Connecting) bootstrap()
+        }
+    }
+
+    private fun startDiscovery() {
+        discoveryJob?.cancel()
+        discoveryJob = viewModelScope.launch {
+            try {
+                discoverer.discoveredPis().collect { devices ->
+                    _state.update { it.copy(discoveredPis = devices) }
+                }
+            } catch (_: Exception) {
+                _state.update {
+                    it.copy(
+                        statusMessage = "Could not start network discovery. Use 'Add by IP address' instead."
                     )
                 }
             }
         }
     }
 
+    private fun stopDiscovery() {
+        discoveryJob?.cancel()
+        discoveryJob = null
+    }
+
+    fun updateManualHostInput(value: String) {
+        _state.update { it.copy(manualHostInput = value) }
+    }
+
+    fun updateManualTokenInput(value: String) {
+        _state.update { it.copy(manualTokenInput = value) }
+    }
+
+    fun chooseDiscoveredPi(pi: DiscoveredPi) {
+        beginPairing(pi.host)
+    }
+
+    fun submitManualHost() {
+        val host = state.value.manualHostInput.trim()
+        if (host.isBlank()) return
+        beginPairing(host)
+    }
+
+    private fun beginPairing(host: String) {
+        stopDiscovery()
+        _state.update {
+            it.copy(
+                pairing = PairingUiState(host = host, busy = true),
+                statusMessage = null
+            )
+        }
+        viewModelScope.launch {
+            when (val attempt = repository.requestPairingToken(host, clientInstanceId)) {
+                is PairingAttempt.Issued -> attemptConnect(host, attempt.token)
+                PairingAttempt.NotSupported -> _state.update {
+                    it.copy(
+                        pairing = PairingUiState(
+                            host = host,
+                            busy = false,
+                            requiresManualToken = true,
+                            note = "This Pi does not advertise automatic pairing. Read the pairing code from the Pi setup screen and paste it below."
+                        )
+                    )
+                }
+                PairingAttempt.WindowClosed -> _state.update {
+                    it.copy(
+                        pairing = PairingUiState(
+                            host = host,
+                            busy = false,
+                            requiresManualToken = true,
+                            note = "Pairing is closed on this Pi. Run 'pihouse pair --open' on the Pi or paste a pairing code below."
+                        )
+                    )
+                }
+                is PairingAttempt.Failed -> _state.update {
+                    it.copy(
+                        pairing = PairingUiState(
+                            host = host,
+                            busy = false,
+                            requiresManualToken = true,
+                            note = attempt.message
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun submitManualToken() {
+        val pairing = state.value.pairing ?: return
+        val token = state.value.manualTokenInput.trim()
+        if (token.isBlank()) return
+        _state.update { it.copy(pairing = pairing.copy(busy = true)) }
+        viewModelScope.launch { attemptConnect(pairing.host, token) }
+    }
+
+    fun forgetPi() {
+        stopDiscovery()
+        viewModelScope.launch {
+            repository.forgetPi()
+            _state.update {
+                HomeUiState(stage = HomeStage.Empty, statusMessage = "Pi forgotten. Pair again when ready.")
+            }
+        }
+    }
+
     fun refreshStatus() {
         val dashboard = state.value.dashboard ?: return
-        viewModelScope.launch {
-            runOperation { repository.refresh(dashboard) }
-        }
+        viewModelScope.launch { runOperation { repository.refresh(dashboard) } }
     }
 
-    fun reconnect(speakerId: String) {
+    fun setZoneOn(zoneId: String, on: Boolean) {
         val dashboard = state.value.dashboard ?: return
-        viewModelScope.launch {
-            runOperation { repository.reconnect(dashboard, speakerId) }
-        }
-    }
-
-    fun runWatchdog() {
-        val dashboard = state.value.dashboard ?: return
-        viewModelScope.launch {
-            runOperation { repository.runWatchdog(dashboard) }
-        }
-    }
-
-    fun restartService() {
-        val dashboard = state.value.dashboard ?: return
-        viewModelScope.launch {
-            runOperation { repository.restartService(dashboard, "bt_watchdog") }
-        }
-    }
-
-    fun selectRoute(routeId: String) {
-        val dashboard = state.value.dashboard ?: return
-        viewModelScope.launch {
-            runOperation { repository.selectRoute(dashboard, routeId) }
-        }
-    }
-
-    fun updateZoneNameInput(zoneName: String) {
-        _state.update { it.copy(zoneNameInput = zoneName) }
-    }
-
-    fun scanBluetoothDevices() {
-        val dashboard = state.value.dashboard ?: return
-        viewModelScope.launch {
-            _state.update { it.copy(isScanning = true, operationMessage = "Scanning for Bluetooth speakers on the Pi...") }
-            val result = try {
-                repository.scanBluetoothDevices(dashboard)
-            } catch (exception: Exception) {
-                BluetoothScanResult(
-                    message = exception.message ?: "Bluetooth scan failed.",
-                    devices = null
-                )
-            }
-            _state.update {
-                it.copy(
-                    isScanning = false,
-                    operationMessage = result.message,
-                    bluetoothDevices = result.devices ?: it.bluetoothDevices
-                )
-            }
-        }
-    }
-
-    fun pairSpeaker(address: String) {
-        val dashboard = state.value.dashboard ?: return
-        viewModelScope.launch {
-            runOperation { repository.pairSpeaker(dashboard, address) }
-            refreshBluetoothDevicesQuietly()
-        }
-    }
-
-    fun assignSpeaker(systemId: String, address: String) {
-        val dashboard = state.value.dashboard ?: return
-        val zoneName = state.value.zoneNameInput
-        viewModelScope.launch {
-            runOperation { repository.assignSpeaker(dashboard, systemId, address, zoneName) }
-            _state.update { it.copy(zoneNameInput = "") }
-        }
-    }
-
-    private suspend fun refreshBluetoothDevicesQuietly() {
-        val dashboard = state.value.dashboard ?: return
-        val result = try {
-            repository.scanBluetoothDevices(dashboard, scanSeconds = 0)
-        } catch (exception: Exception) {
-            return
-        }
-        result.devices?.let { devices ->
-            _state.update { it.copy(bluetoothDevices = devices) }
-        }
-    }
-
-    fun setSpeakerSystemEnabled(systemId: String, enabled: Boolean) {
-        val dashboard = state.value.dashboard ?: return
-        val nextEnabledSystemIds = if (enabled) {
-            (dashboard.enabledSystemIds + systemId).distinct()
+        val next = if (on) {
+            (dashboard.enabledSystemIds + zoneId).distinct()
         } else {
-            dashboard.enabledSystemIds.filterNot { it == systemId }
+            dashboard.enabledSystemIds.filterNot { it == zoneId }
         }
+        viewModelScope.launch { runOperation { repository.setSpeakerSystems(dashboard, next) } }
+    }
 
-        viewModelScope.launch {
-            runOperation { repository.setSpeakerSystems(dashboard, nextEnabledSystemIds) }
-        }
+    fun setAllZones(on: Boolean) {
+        val dashboard = state.value.dashboard ?: return
+        val next = if (on) dashboard.speakerSystems.map { it.id }.distinct() else emptyList()
+        viewModelScope.launch { runOperation { repository.setSpeakerSystems(dashboard, next) } }
+    }
+
+    fun reconnectSpeaker(speakerId: String) {
+        val dashboard = state.value.dashboard ?: return
+        viewModelScope.launch { runOperation { repository.reconnect(dashboard, speakerId) } }
     }
 
     private suspend fun runOperation(block: suspend () -> OperationActionResult) {
-        _state.update { it.copy(isLoading = true, operationMessage = null) }
+        _state.update { it.copy(isBusy = true, statusMessage = null) }
         val result = try {
             block()
         } catch (exception: Exception) {
             OperationActionResult(exception.message ?: "Operation failed.")
         }
         _state.update {
-            val refreshedDashboard = result.dashboard ?: it.dashboard
             it.copy(
-                isLoading = false,
-                operationMessage = listOfNotNull(
-                    result.message,
-                    refreshedDashboard?.unconfirmedSpeakerStateMessage()
-                ).joinToString("\n"),
-                dashboard = refreshedDashboard
+                isBusy = false,
+                dashboard = result.dashboard ?: it.dashboard,
+                statusMessage = result.message.ifBlank { null }
             )
         }
     }
-}
 
-private fun DashboardModel.unconfirmedSpeakerStateMessage(): String? {
-    val missing = buildList {
-        if (!hasSpeakerSystemStatus) add("speaker systems")
-        if (!hasAudioOutputStatus) add("audio output assignment")
-        if (!hasSpeakerConnectionStatus) add("speaker connection")
+    fun dismissStatusMessage() {
+        _state.update { it.copy(statusMessage = null) }
     }
-    if (missing.isEmpty()) return null
-    return "Pi/service health is separate from speaker readiness. Missing Pi-reported ${missing.joinToString()} status."
+
+    override fun onCleared() {
+        stopDiscovery()
+        super.onCleared()
+    }
 }
 
-data class PiUiState(
-    val host: String = "audiopi.local",
-    val token: String = "",
-    val isLoading: Boolean = false,
-    val isScanning: Boolean = false,
-    val connectionLabel: String = "unpaired",
-    val message: String? = null,
-    val operationMessage: String? = null,
+enum class HomeStage { Connecting, Connected, Empty, Discovering, ConnectionFailed }
+
+data class HomeUiState(
+    val stage: HomeStage = HomeStage.Connecting,
+    val savedHost: String? = null,
     val dashboard: DashboardModel? = null,
-    val bluetoothDevices: List<BluetoothDeviceModel> = emptyList(),
-    val zoneNameInput: String = ""
+    val isBusy: Boolean = false,
+    val statusMessage: String? = null,
+    val discoveredPis: List<DiscoveredPi> = emptyList(),
+    val manualHostInput: String = "",
+    val manualTokenInput: String = "",
+    val pairing: PairingUiState? = null
+)
+
+data class PairingUiState(
+    val host: String,
+    val busy: Boolean,
+    val requiresManualToken: Boolean = false,
+    val note: String? = null
 )
 
 class MainViewModelFactory(
-    private val repository: PiRepository
+    private val repository: PiRepository,
+    private val discoverer: PiNetworkDiscoverer,
+    private val clientInstanceId: String
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        return MainViewModel(repository) as T
+        return MainViewModel(repository, discoverer, clientInstanceId) as T
     }
 }

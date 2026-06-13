@@ -16,7 +16,11 @@ class MainActivity : ComponentActivity() {
         setContent {
             PiStreamTheme {
                 val viewModel: MainViewModel = viewModel(
-                    factory = MainViewModelFactory(container.repository)
+                    factory = MainViewModelFactory(
+                        repository = container.repository,
+                        discoverer = container.discoverer,
+                        clientInstanceId = container.clientInstanceId
+                    )
                 )
                 PiCompanionScreen(viewModel = viewModel)
             }

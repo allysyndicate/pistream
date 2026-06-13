@@ -25,6 +25,10 @@ class SecureTokenStore(context: Context) {
         prefs.edit().putString(KEY_TOKEN, token.trim()).apply()
     }
 
+    fun clearToken() {
+        prefs.edit().remove(KEY_TOKEN).apply()
+    }
+
     companion object {
         private const val KEY_TOKEN = "bearer_token"
     }

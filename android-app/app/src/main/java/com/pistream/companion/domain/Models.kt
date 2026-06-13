@@ -94,6 +94,18 @@ data class BluetoothDeviceModel(
     val label: String = name ?: address
 }
 
+data class DiscoveredPi(
+    val serviceName: String,
+    val host: String,
+    val port: Int,
+    val deviceId: String?,
+    val contractVersion: String?,
+    val pairingOpen: Boolean
+) {
+    val label: String = if (serviceName.isNotBlank()) serviceName else host
+    val authority: String = "$host:$port"
+}
+
 sealed interface ConnectionResult {
     data class FoundHealthy(val dashboard: DashboardModel) : ConnectionResult
     data class FoundUnhealthy(val dashboard: DashboardModel) : ConnectionResult

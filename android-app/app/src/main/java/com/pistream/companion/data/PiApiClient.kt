@@ -6,6 +6,8 @@ import com.pistream.companion.data.dto.HealthDto
 import com.pistream.companion.data.dto.IdentityDto
 import com.pistream.companion.data.dto.OperationDto
 import com.pistream.companion.data.dto.OperationRequestDto
+import com.pistream.companion.data.dto.PairingRequestDto
+import com.pistream.companion.data.dto.PairingResponseDto
 import com.pistream.companion.data.dto.SetSpeakerSystemsRequestDto
 import com.pistream.companion.data.dto.StatusDto
 import io.ktor.client.HttpClient
@@ -55,6 +57,18 @@ class PiApiClient {
     suspend fun status(baseUrl: String, token: String): ApiCallResult<StatusDto> {
         val response = client.get("$baseUrl/status") {
             bearerAuth(token)
+        }
+        if (!response.status.isSuccess()) return response.status.toApiError()
+        return ApiCallResult.Success(response.body())
+    }
+
+    suspend fun requestPairingToken(
+        baseUrl: String,
+        body: PairingRequestDto
+    ): ApiCallResult<PairingResponseDto> {
+        val response = client.post("$baseUrl/pairing/request-token") {
+            contentType(ContentType.Application.Json)
+            setBody(body)
         }
         if (!response.status.isSuccess()) return response.status.toApiError()
         return ApiCallResult.Success(response.body())

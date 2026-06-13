@@ -1,8 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!--
+        Pi-owned Bluetooth: all speaker pairing, connect, and audio routing
+        happens on the Raspberry Pi via its HTTP API. The phone never scans for
+        or connects to Bluetooth speakers directly, so no BLUETOOTH_SCAN or
+        BLUETOOTH_CONNECT permission is requested. Network permissions cover
+        mDNS discovery (NsdManager) and the Pi REST API.
+    -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
 
     <application
         android:name=".PiStreamApplication"

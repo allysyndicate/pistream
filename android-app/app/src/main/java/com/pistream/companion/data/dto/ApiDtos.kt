@@ -253,3 +253,16 @@ data class OperationDto(
     @SerialName("restartIssued")
     val restartIssued: Boolean? = null
 )
+
+@Serializable
+data class PairingRequestDto(
+    val clientName: String,
+    val clientInstanceId: String
+)
+
+@Serializable
+data class PairingResponseDto(
+    val ok: Boolean = true,
+    val token: String,
+    val expiresAt: String? = null
+)
