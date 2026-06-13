@@ -2,6 +2,8 @@ package com.pistream.companion.data
 
 import com.pistream.companion.data.dto.OperationRequestDto
 import com.pistream.companion.data.dto.OperationDto
+import com.pistream.companion.data.dto.SetSpeakerSystemsRequestDto
+import com.pistream.companion.domain.BluetoothDeviceModel
 import com.pistream.companion.domain.ConnectionResult
 import com.pistream.companion.domain.DashboardModel
 import com.pistream.companion.domain.isCompatible
@@ -70,27 +72,120 @@ class PiRepository(
         }
     }
 
-    suspend fun reconnect(dashboard: DashboardModel, speakerId: String): String {
+    suspend fun refresh(dashboard: DashboardModel): OperationActionResult {
+        return when (val result = apiClient.status(piBaseUrl(dashboard.host), tokenStore.loadToken())) {
+            is ApiCallResult.Success -> OperationActionResult(
+                message = "Status refreshed.",
+                dashboard = result.value.toDashboard(dashboard.host)
+            )
+            is ApiCallResult.Failure -> OperationActionResult(
+                message = "${result.code}: ${result.message}",
+                dashboard = null
+            )
+        }
+    }
+
+    suspend fun reconnect(dashboard: DashboardModel, speakerId: String): OperationActionResult {
         val request = dashboard.operationRequest(speakerId = speakerId)
         return when (val result = apiClient.reconnect(piBaseUrl(dashboard.host), tokenStore.loadToken(), request)) {
             is ApiCallResult.Success -> operationStateMessage(dashboard, "Reconnect", result.value)
-            is ApiCallResult.Failure -> "${result.code}: ${result.message}"
+            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}")
         }
     }
 
-    suspend fun runWatchdog(dashboard: DashboardModel): String {
+    suspend fun runWatchdog(dashboard: DashboardModel): OperationActionResult {
         val request = dashboard.operationRequest()
         return when (val result = apiClient.runWatchdog(piBaseUrl(dashboard.host), tokenStore.loadToken(), request)) {
             is ApiCallResult.Success -> operationStateMessage(dashboard, "Watchdog", result.value)
-            is ApiCallResult.Failure -> "${result.code}: ${result.message}"
+            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}")
         }
     }
 
-    suspend fun restartService(dashboard: DashboardModel, serviceId: String): String {
+    suspend fun selectRoute(dashboard: DashboardModel, routeId: String): OperationActionResult {
+        val request = dashboard.operationRequest(routeId = routeId)
+        return when (val result = apiClient.selectRoute(piBaseUrl(dashboard.host), tokenStore.loadToken(), request)) {
+            is ApiCallResult.Success -> operationStateMessage(dashboard, "Route", result.value)
+            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}")
+        }
+    }
+
+    suspend fun setSpeakerSystems(dashboard: DashboardModel, enabledSystemIds: List<String>): OperationActionResult {
+        val normalizedIds = enabledSystemIds.distinct()
+        val baseUrl = piBaseUrl(dashboard.host)
+        val token = tokenStore.loadToken()
+
+        if (dashboard.canRunOperation("set_speaker_systems")) {
+            val request = dashboard.setSpeakerSystemsRequest(normalizedIds)
+            return when (val result = apiClient.setSpeakerSystems(baseUrl, token, request)) {
+                is ApiCallResult.Success -> operationStateMessage(dashboard, "Speaker systems", result.value)
+                is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}")
+            }
+        }
+
+        val legacyRoute = normalizedIds.toLegacyRouteId()
+            ?: return OperationActionResult("All-off requires the set_speaker_systems operation on the Pi.")
+        if (!dashboard.canRunOperation("select_route")) {
+            return OperationActionResult("Speaker system controls are unavailable on this Pi status snapshot.")
+        }
+
+        val request = dashboard.operationRequest(routeId = legacyRoute)
+        return when (val result = apiClient.selectRoute(baseUrl, token, request)) {
+            is ApiCallResult.Success -> operationStateMessage(dashboard, "Route", result.value)
+            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}")
+        }
+    }
+
+    suspend fun scanBluetoothDevices(dashboard: DashboardModel, scanSeconds: Int = 8): BluetoothScanResult {
+        return when (val result = apiClient.bluetoothDevices(piBaseUrl(dashboard.host), tokenStore.loadToken(), scanSeconds)) {
+            is ApiCallResult.Success -> BluetoothScanResult(
+                message = "Found ${result.value.devices.size} Bluetooth device(s) visible to the Pi.",
+                devices = result.value.devices.map {
+                    BluetoothDeviceModel(
+                        address = it.address,
+                        name = it.name,
+                        paired = it.paired,
+                        trusted = it.trusted,
+                        connected = it.connected
+                    )
+                }
+            )
+            is ApiCallResult.Failure -> BluetoothScanResult(
+                message = "${result.code}: ${result.message}",
+                devices = null
+            )
+        }
+    }
+
+    suspend fun pairSpeaker(dashboard: DashboardModel, address: String): OperationActionResult {
+        val request = dashboard.operationRequest(address = address)
+        return when (val result = apiClient.pairSpeaker(piBaseUrl(dashboard.host), tokenStore.loadToken(), request)) {
+            is ApiCallResult.Success -> operationStateMessage(dashboard, "Pair", result.value)
+            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}")
+        }
+    }
+
+    suspend fun assignSpeaker(
+        dashboard: DashboardModel,
+        speakerId: String,
+        address: String,
+        displayName: String?
+    ): OperationActionResult {
+        val request = dashboard.operationRequest(
+            speakerId = speakerId,
+            address = address,
+            displayName = displayName?.trim()?.takeIf { it.isNotEmpty() }
+        )
+        return when (val result = apiClient.assignSpeaker(piBaseUrl(dashboard.host), tokenStore.loadToken(), request)) {
+            is ApiCallResult.Success -> operationStateMessage(dashboard, "Assign", result.value)
+            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}")
+        }
+    }
+
+    suspend fun restartService(dashboard: DashboardModel, serviceId: String): OperationActionResult {
         val request = dashboard.operationRequest(serviceId = serviceId)
         return when (val result = apiClient.restartService(piBaseUrl(dashboard.host), tokenStore.loadToken(), request)) {
             is ApiCallResult.Success -> operationStateMessage(dashboard, "Restart", result.value)
-            is ApiCallResult.Failure -> "${result.code}: ${result.message}"
+            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}")
         }
     }
 
@@ -98,15 +193,18 @@ class PiRepository(
         dashboard: DashboardModel,
         label: String,
         accepted: OperationDto
-    ): String {
-        if (accepted.status !in setOf("queued", "running")) {
-            return "$label ${accepted.status}: ${accepted.operationId}"
+    ): OperationActionResult {
+        val message = if (accepted.status !in setOf("queued", "running")) {
+            "$label ${accepted.status}: ${accepted.operationId}"
+        } else {
+            when (val polled = apiClient.operation(piBaseUrl(dashboard.host), tokenStore.loadToken(), accepted.operationId)) {
+                is ApiCallResult.Success -> "$label ${polled.value.status}: ${polled.value.operationId}"
+                is ApiCallResult.Failure -> "$label pending: ${accepted.operationId}; poll ${polled.code}: ${polled.message}"
+            }
         }
 
-        return when (val polled = apiClient.operation(piBaseUrl(dashboard.host), tokenStore.loadToken(), accepted.operationId)) {
-            is ApiCallResult.Success -> "$label ${polled.value.status}: ${polled.value.operationId}"
-            is ApiCallResult.Failure -> "$label pending: ${accepted.operationId}; poll ${polled.code}: ${polled.message}"
-        }
+        val refreshed = refresh(dashboard)
+        return refreshed.copy(message = "$message\n${refreshed.message}")
     }
 
     companion object {
@@ -114,15 +212,50 @@ class PiRepository(
     }
 }
 
+data class OperationActionResult(
+    val message: String,
+    val dashboard: DashboardModel? = null
+)
+
+data class BluetoothScanResult(
+    val message: String,
+    val devices: List<BluetoothDeviceModel>?
+)
+
 private fun DashboardModel.operationRequest(
     speakerId: String? = null,
-    serviceId: String? = null
+    serviceId: String? = null,
+    routeId: String? = null,
+    address: String? = null,
+    displayName: String? = null
 ): OperationRequestDto {
     return OperationRequestDto(
         observedBootId = requireNotNull(observedBootId) { "Missing observedBootId." },
         observedAt = requireNotNull(observedAt) { "Missing observedAt." },
         clientRequestId = UUID.randomUUID().toString(),
         speakerId = speakerId,
-        serviceId = serviceId
+        serviceId = serviceId,
+        routeId = routeId,
+        address = address,
+        displayName = displayName
     )
+}
+
+private fun DashboardModel.setSpeakerSystemsRequest(enabledSystemIds: List<String>): SetSpeakerSystemsRequestDto {
+    return SetSpeakerSystemsRequestDto(
+        observedBootId = requireNotNull(observedBootId) { "Missing observedBootId." },
+        observedAt = requireNotNull(observedAt) { "Missing observedAt." },
+        clientRequestId = UUID.randomUUID().toString(),
+        enabledSystemIds = enabledSystemIds
+    )
+}
+
+private fun List<String>.toLegacyRouteId(): String? {
+    val ids = toSet()
+    return when (ids) {
+        setOf("indoor") -> "indoor"
+        setOf("outdoor") -> "outdoor"
+        setOf("indoor", "outdoor") -> "both"
+        else -> null
+    }
 }

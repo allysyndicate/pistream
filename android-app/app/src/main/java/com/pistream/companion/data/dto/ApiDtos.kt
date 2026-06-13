@@ -49,8 +49,12 @@ data class StatusDto(
     val observedAt: String? = null,
     val services: List<ServiceDto> = emptyList(),
     val speakers: List<SpeakerDto> = emptyList(),
+    val speakerSystems: List<SpeakerSystemDto> = emptyList(),
     val sinks: List<SinkDto> = emptyList(),
     val spotifyEndpoints: List<SpotifyEndpointDto> = emptyList(),
+    val routes: List<RouteDto> = emptyList(),
+    val audioRoute: AudioRouteDto? = null,
+    val audioOutput: AudioOutputDto? = null,
     val spotify: SpotifyDto? = null,
     val watchdog: WatchdogDto? = null,
     val operations: OperationsDto? = null,
@@ -65,6 +69,19 @@ data class SpeakerDto(
     @SerialName("componentState")
     val state: String? = null,
     val connected: Boolean? = null,
+    val address: String? = null,
+    val reasonCodes: List<String> = emptyList()
+)
+
+@Serializable
+data class SpeakerSystemDto(
+    val systemId: String,
+    val displayName: String? = null,
+    val sinkId: String? = null,
+    val enabled: Boolean = false,
+    val active: Boolean = false,
+    val readiness: String? = null,
+    val ready: Boolean? = null,
     val reasonCodes: List<String> = emptyList()
 )
 
@@ -84,6 +101,7 @@ data class SpotifyEndpointDto(
     val id: String,
     val displayName: String? = null,
     val componentState: String? = null,
+    val activeState: String? = null,
     val serviceId: String? = null,
     val reasonCodes: List<String> = emptyList()
 )
@@ -114,8 +132,34 @@ data class SpotifyPlaybackDto(
 @Serializable
 data class RouteReadinessDto(
     val endpointId: String,
+    val routeId: String? = null,
     val ready: Boolean,
     val reasonCodes: List<String> = emptyList()
+)
+
+@Serializable
+data class RouteDto(
+    val routeId: String,
+    val displayName: String? = null,
+    val ready: Boolean,
+    val selected: Boolean,
+    val active: Boolean,
+    val reasonCodes: List<String> = emptyList()
+)
+
+@Serializable
+data class AudioRouteDto(
+    val selectedRouteId: String? = null,
+    val activeRouteId: String? = null,
+    val lastChangedAt: String? = null
+)
+
+@Serializable
+data class AudioOutputDto(
+    val enabledSystemIds: List<String> = emptyList(),
+    val activeSystemIds: List<String> = emptyList(),
+    val lastChangedAt: String? = null,
+    val adapterMode: String? = null
 )
 
 @Serializable
@@ -168,7 +212,35 @@ data class OperationRequestDto(
     val observedAt: String,
     val clientRequestId: String,
     val speakerId: String? = null,
-    val serviceId: String? = null
+    val serviceId: String? = null,
+    val routeId: String? = null,
+    val address: String? = null,
+    val displayName: String? = null
+)
+
+@Serializable
+data class BluetoothDevicesDto(
+    val ok: Boolean = true,
+    val devices: List<BluetoothDeviceDto> = emptyList(),
+    val scanSeconds: Int? = null,
+    val observedAt: String? = null
+)
+
+@Serializable
+data class BluetoothDeviceDto(
+    val address: String,
+    val name: String? = null,
+    val paired: Boolean = false,
+    val trusted: Boolean = false,
+    val connected: Boolean = false
+)
+
+@Serializable
+data class SetSpeakerSystemsRequestDto(
+    val observedBootId: String,
+    val observedAt: String,
+    val clientRequestId: String,
+    val enabledSystemIds: List<String>
 )
 
 @Serializable

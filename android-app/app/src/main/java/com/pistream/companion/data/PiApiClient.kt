@@ -1,14 +1,17 @@
 package com.pistream.companion.data
 
 import com.pistream.companion.data.dto.ApiEnvelope
+import com.pistream.companion.data.dto.BluetoothDevicesDto
 import com.pistream.companion.data.dto.HealthDto
 import com.pistream.companion.data.dto.IdentityDto
 import com.pistream.companion.data.dto.OperationDto
 import com.pistream.companion.data.dto.OperationRequestDto
+import com.pistream.companion.data.dto.SetSpeakerSystemsRequestDto
 import com.pistream.companion.data.dto.StatusDto
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
 import io.ktor.client.engine.android.Android
+import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.get
@@ -28,6 +31,12 @@ class PiApiClient {
     private val client = HttpClient(Android) {
         install(ContentNegotiation) {
             json(serializerJson)
+        }
+        install(HttpTimeout) {
+            // Pi-side Bluetooth scans and pair/connect attempts block the request.
+            requestTimeoutMillis = 60_000
+            connectTimeoutMillis = 10_000
+            socketTimeoutMillis = 60_000
         }
     }
 
@@ -63,20 +72,48 @@ class PiApiClient {
         return postOperation("$baseUrl/operations/run-watchdog", token, body)
     }
 
+    suspend fun selectRoute(baseUrl: String, token: String, body: OperationRequestDto): ApiCallResult<OperationDto> {
+        return postOperation("$baseUrl/operations/select-route", token, body)
+    }
+
+    suspend fun setSpeakerSystems(
+        baseUrl: String,
+        token: String,
+        body: SetSpeakerSystemsRequestDto
+    ): ApiCallResult<OperationDto> {
+        return postOperation("$baseUrl/operations/set-speaker-systems", token, body)
+    }
+
+    suspend fun bluetoothDevices(baseUrl: String, token: String, scanSeconds: Int): ApiCallResult<BluetoothDevicesDto> {
+        val response = client.get("$baseUrl/bluetooth/devices?scanSeconds=$scanSeconds") {
+            bearerAuth(token)
+        }
+        if (!response.status.isSuccess()) return response.status.toApiError()
+        return ApiCallResult.Success(response.body())
+    }
+
+    suspend fun pairSpeaker(baseUrl: String, token: String, body: OperationRequestDto): ApiCallResult<OperationDto> {
+        return postOperation("$baseUrl/operations/pair-speaker", token, body)
+    }
+
+    suspend fun assignSpeaker(baseUrl: String, token: String, body: OperationRequestDto): ApiCallResult<OperationDto> {
+        return postOperation("$baseUrl/operations/assign-speaker", token, body)
+    }
+
     suspend fun operation(baseUrl: String, token: String, operationId: String): ApiCallResult<OperationDto> {
         val response = client.get("$baseUrl/operations/$operationId") {
             bearerAuth(token)
         }
         if (!response.status.isSuccess()) return response.status.toApiError()
         val envelope = response.body<ApiEnvelope<OperationDto>>()
-        return envelope.operation?.let(ApiCallResult::Success)
+        return envelope.operation?.let { operation -> ApiCallResult.Success(operation) }
             ?: ApiCallResult.Failure("api_unavailable", "Missing operation payload.")
     }
 
     private suspend fun postOperation(
         url: String,
         token: String,
-        body: OperationRequestDto
+        body: Any
     ): ApiCallResult<OperationDto> {
         val response = client.post(url) {
             bearerAuth(token)
@@ -85,7 +122,7 @@ class PiApiClient {
         }
         if (!response.status.isSuccess()) return response.status.toApiError()
         val envelope = response.body<ApiEnvelope<OperationDto>>()
-        return envelope.operation?.let(ApiCallResult::Success)
+        return envelope.operation?.let { operation -> ApiCallResult.Success(operation) }
             ?: ApiCallResult.Failure("api_unavailable", "Missing operation payload.")
     }
 }
