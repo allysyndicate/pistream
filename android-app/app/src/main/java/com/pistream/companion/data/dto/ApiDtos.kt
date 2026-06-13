@@ -58,7 +58,8 @@ data class StatusDto(
     val spotify: SpotifyDto? = null,
     val watchdog: WatchdogDto? = null,
     val operations: OperationsDto? = null,
-    val controls: ControlsDto? = null
+    val controls: ControlsDto? = null,
+    val adapterMode: String? = null
 )
 
 @Serializable

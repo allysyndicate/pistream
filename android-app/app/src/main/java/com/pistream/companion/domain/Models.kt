@@ -241,7 +241,7 @@ fun StatusDto.toDashboard(host: String): DashboardModel {
         enabledSystemIds = enabledSystemIds,
         activeSystemIds = activeSystemIds,
         audioOutputLastChangedAt = audioOutput?.lastChangedAt ?: audioRoute?.lastChangedAt,
-        audioOutputAdapterMode = audioOutput?.adapterMode,
+        audioOutputAdapterMode = adapterMode ?: audioOutput?.adapterMode,
         hasSpeakerSystemStatus = hasSpeakerSystemStatus,
         hasAudioOutputStatus = hasAudioOutputStatus,
         hasSpeakerConnectionStatus = hasSpeakerConnectionStatus,
