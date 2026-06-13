@@ -118,7 +118,8 @@ class PiRepository(
             )
             is ApiCallResult.Failure -> OperationActionResult(
                 message = "${result.code}: ${result.message}",
-                dashboard = null
+                dashboard = null,
+                failureCode = result.code
             )
         }
     }
@@ -127,7 +128,7 @@ class PiRepository(
         val request = dashboard.operationRequest(speakerId = speakerId)
         return when (val result = apiClient.reconnect(piBaseUrl(dashboard.host), tokenStore.loadToken(), request)) {
             is ApiCallResult.Success -> operationStateMessage(dashboard, "Reconnect", result.value)
-            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}")
+            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}", failureCode = result.code)
         }
     }
 
@@ -135,7 +136,7 @@ class PiRepository(
         val request = dashboard.operationRequest()
         return when (val result = apiClient.runWatchdog(piBaseUrl(dashboard.host), tokenStore.loadToken(), request)) {
             is ApiCallResult.Success -> operationStateMessage(dashboard, "Watchdog", result.value)
-            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}")
+            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}", failureCode = result.code)
         }
     }
 
@@ -143,7 +144,7 @@ class PiRepository(
         val request = dashboard.operationRequest(routeId = routeId)
         return when (val result = apiClient.selectRoute(piBaseUrl(dashboard.host), tokenStore.loadToken(), request)) {
             is ApiCallResult.Success -> operationStateMessage(dashboard, "Route", result.value)
-            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}")
+            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}", failureCode = result.code)
         }
     }
 
@@ -156,7 +157,7 @@ class PiRepository(
             val request = dashboard.setSpeakerSystemsRequest(normalizedIds)
             return when (val result = apiClient.setSpeakerSystems(baseUrl, token, request)) {
                 is ApiCallResult.Success -> operationStateMessage(dashboard, "Speaker systems", result.value)
-                is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}")
+                is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}", failureCode = result.code)
             }
         }
 
@@ -169,7 +170,7 @@ class PiRepository(
         val request = dashboard.operationRequest(routeId = legacyRoute)
         return when (val result = apiClient.selectRoute(baseUrl, token, request)) {
             is ApiCallResult.Success -> operationStateMessage(dashboard, "Route", result.value)
-            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}")
+            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}", failureCode = result.code)
         }
     }
 
@@ -198,7 +199,7 @@ class PiRepository(
         val request = dashboard.operationRequest(address = address)
         return when (val result = apiClient.pairSpeaker(piBaseUrl(dashboard.host), tokenStore.loadToken(), request)) {
             is ApiCallResult.Success -> operationStateMessage(dashboard, "Pair", result.value)
-            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}")
+            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}", failureCode = result.code)
         }
     }
 
@@ -215,7 +216,7 @@ class PiRepository(
         )
         return when (val result = apiClient.assignSpeaker(piBaseUrl(dashboard.host), tokenStore.loadToken(), request)) {
             is ApiCallResult.Success -> operationStateMessage(dashboard, "Assign", result.value)
-            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}")
+            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}", failureCode = result.code)
         }
     }
 
@@ -223,7 +224,7 @@ class PiRepository(
         val request = dashboard.operationRequest(serviceId = serviceId)
         return when (val result = apiClient.restartService(piBaseUrl(dashboard.host), tokenStore.loadToken(), request)) {
             is ApiCallResult.Success -> operationStateMessage(dashboard, "Restart", result.value)
-            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}")
+            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}", failureCode = result.code)
         }
     }
 
@@ -252,7 +253,8 @@ class PiRepository(
 
 data class OperationActionResult(
     val message: String,
-    val dashboard: DashboardModel? = null
+    val dashboard: DashboardModel? = null,
+    val failureCode: String? = null
 )
 
 data class BluetoothScanResult(

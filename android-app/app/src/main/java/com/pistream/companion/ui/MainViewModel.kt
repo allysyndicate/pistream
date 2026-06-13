@@ -13,6 +13,7 @@ import com.pistream.companion.domain.ConnectionResult
 import com.pistream.companion.domain.DashboardModel
 import com.pistream.companion.domain.DiscoveredPi
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -56,15 +57,27 @@ class MainViewModel(
     }
 
     private suspend fun attemptConnect(host: String, token: String) {
+        // Preserve the on-screen panel when we already have a dashboard or are on the
+        // ConnectionFailed card — flipping to a generic "Connecting..." is what users
+        // perceive as a reconnect "glitch". Show a small reconnecting indicator instead.
+        val previous = _state.value
+        val keepStage = previous.dashboard != null || previous.stage == HomeStage.ConnectionFailed
         _state.update {
             it.copy(
-                stage = HomeStage.Connecting,
-                connectionLabel = ConnectionLabel.None,
+                stage = if (keepStage) it.stage else HomeStage.Connecting,
+                connectionLabel = if (keepStage) it.connectionLabel else ConnectionLabel.None,
+                isReconnecting = true,
                 savedHost = host,
-                statusMessage = null
+                statusMessage = if (keepStage) it.statusMessage else null
             )
         }
-        val result = repository.connect(host, token)
+        var result = repository.connect(host, token)
+        // A brief Wi-Fi handoff or Pi API restart surfaces as IOException → NotFound.
+        // Swallow one of those before tossing the user to a Failed screen.
+        if (result is ConnectionResult.NotFound) {
+            delay(700)
+            result = repository.connect(host, token)
+        }
         applyConnectionResult(host, result)
     }
 
@@ -76,6 +89,7 @@ class MainViewModel(
                     connectionLabel = ConnectionLabel.Connected(host),
                     savedHost = host,
                     dashboard = result.dashboard,
+                    isReconnecting = false,
                     statusMessage = null
                 )
                 is ConnectionResult.FoundDemo -> current.copy(
@@ -83,6 +97,7 @@ class MainViewModel(
                     connectionLabel = ConnectionLabel.Demo(host),
                     savedHost = host,
                     dashboard = result.dashboard,
+                    isReconnecting = false,
                     statusMessage = null
                 )
                 is ConnectionResult.FoundUnhealthy -> current.copy(
@@ -90,30 +105,35 @@ class MainViewModel(
                     connectionLabel = ConnectionLabel.Degraded(host),
                     savedHost = host,
                     dashboard = result.dashboard,
+                    isReconnecting = false,
                     statusMessage = "Pi is reachable but reports degraded health."
                 )
                 is ConnectionResult.WrongDevice -> current.copy(
                     stage = HomeStage.ConnectionFailed,
                     connectionLabel = ConnectionLabel.Failed,
                     savedHost = host,
+                    isReconnecting = false,
                     statusMessage = "Host $host now reports a different Pi identity. Forget this Pi to pair the new one."
                 )
                 is ConnectionResult.Unauthorized -> current.copy(
                     stage = HomeStage.ConnectionFailed,
                     connectionLabel = ConnectionLabel.Failed,
                     savedHost = host,
+                    isReconnecting = false,
                     statusMessage = "Pi rejected the saved pairing token. Forget this Pi and pair again."
                 )
                 is ConnectionResult.ApiUnavailable -> current.copy(
                     stage = HomeStage.ConnectionFailed,
                     connectionLabel = ConnectionLabel.Failed,
                     savedHost = host,
+                    isReconnecting = false,
                     statusMessage = "Could not reach $host: ${result.cause}"
                 )
                 ConnectionResult.NotFound -> current.copy(
                     stage = HomeStage.ConnectionFailed,
                     connectionLabel = ConnectionLabel.Failed,
                     savedHost = host,
+                    isReconnecting = false,
                     statusMessage = "Could not reach $host on this network. Make sure the Pi is online and on the same Wi-Fi."
                 )
             }
@@ -121,6 +141,7 @@ class MainViewModel(
     }
 
     fun retrySavedConnection() {
+        if (state.value.isReconnecting) return
         val host = state.value.savedHost ?: return
         val token = repository.savedToken()
         viewModelScope.launch {
@@ -128,6 +149,7 @@ class MainViewModel(
                 _state.update {
                     it.copy(
                         stage = HomeStage.ConnectionFailed,
+                        isReconnecting = false,
                         statusMessage = "No pairing token stored. Forget this Pi and pair again."
                     )
                 }
@@ -154,9 +176,20 @@ class MainViewModel(
     fun cancelConnectFlow() {
         stopDiscovery()
         viewModelScope.launch {
-            val nextStage = if (repository.hasSavedPi()) HomeStage.Connecting else HomeStage.Empty
-            _state.update { it.copy(stage = nextStage, pairing = null) }
-            if (nextStage == HomeStage.Connecting) bootstrap()
+            // If a dashboard is already on screen, return to it directly — re-bootstrapping
+            // would tear the dashboard down to flash "Connecting..." for no reason.
+            if (state.value.dashboard != null) {
+                _state.update { it.copy(stage = HomeStage.Connected, pairing = null) }
+                return@launch
+            }
+            val hasSaved = repository.hasSavedPi()
+            _state.update {
+                it.copy(
+                    stage = if (hasSaved) HomeStage.Connecting else HomeStage.Empty,
+                    pairing = null
+                )
+            }
+            if (hasSaved) bootstrap()
         }
     }
 
@@ -414,6 +447,21 @@ class MainViewModel(
         } catch (exception: Exception) {
             OperationActionResult(exception.message ?: "Operation failed.")
         }
+        // A 401 during refresh or any other operation means the saved token is stale —
+        // demote to ConnectionFailed instead of silently painting an error banner over
+        // a screen that still claims it's Connected.
+        if (result.failureCode == "unauthorized") {
+            _state.update {
+                it.copy(
+                    isBusy = false,
+                    isReconnecting = false,
+                    stage = HomeStage.ConnectionFailed,
+                    connectionLabel = ConnectionLabel.Failed,
+                    statusMessage = "Pi rejected the saved pairing token. Forget this Pi and pair again."
+                )
+            }
+            return
+        }
         _state.update {
             it.copy(
                 isBusy = false,
@@ -448,6 +496,7 @@ data class HomeUiState(
     val savedHost: String? = null,
     val dashboard: DashboardModel? = null,
     val isBusy: Boolean = false,
+    val isReconnecting: Boolean = false,
     val statusMessage: String? = null,
     val discoveredPis: List<DiscoveredPi> = emptyList(),
     val manualHostInput: String = "",

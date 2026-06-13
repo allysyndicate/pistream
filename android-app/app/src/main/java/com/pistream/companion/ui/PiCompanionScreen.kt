@@ -213,6 +213,7 @@ private fun HomeBody(
                     HomeStage.ConnectionFailed -> ConnectionFailedPanel(
                         host = state.savedHost,
                         message = state.statusMessage,
+                        isReconnecting = state.isReconnecting,
                         onRetry = onRetry,
                         onForget = onForget
                     )
@@ -234,6 +235,7 @@ private fun HomeBody(
                         connectionLabel = state.connectionLabel,
                         dashboard = state.dashboard,
                         isBusy = state.isBusy,
+                        isReconnecting = state.isReconnecting,
                         statusMessage = state.statusMessage,
                         onSetZoneOn = onSetZoneOn,
                         onSetAllZonesOn = onSetAllZonesOn,
@@ -338,6 +340,7 @@ private fun BurgundyMonogram() {
 private fun ConnectionFailedPanel(
     host: String?,
     message: String?,
+    isReconnecting: Boolean = false,
     onRetry: () -> Unit,
     onForget: () -> Unit
 ) {
@@ -347,7 +350,7 @@ private fun ConnectionFailedPanel(
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             StatusChip(
-                text = "Offline",
+                text = if (isReconnecting) "Reconnecting" else "Offline",
                 backgroundColor = MaterialTheme.colorScheme.errorContainer,
                 contentColor = MaterialTheme.colorScheme.onErrorContainer
             )
@@ -361,10 +364,25 @@ private fun ConnectionFailedPanel(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Spacer(Modifier.height(2.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                PrimaryActionButton(text = "Try again", onClick = onRetry)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                PrimaryActionButton(
+                    text = if (isReconnecting) "Trying again..." else "Try again",
+                    onClick = onRetry,
+                    enabled = !isReconnecting
+                )
+                if (isReconnecting) {
+                    CircularProgressIndicator(
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(18.dp),
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
                 OutlinedButton(
                     onClick = onForget,
+                    enabled = !isReconnecting,
                     shape = RoundedCornerShape(14.dp),
                     contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp)
                 ) {
@@ -575,6 +593,7 @@ private fun ColumnScope.ConnectedPanel(
     connectionLabel: ConnectionLabel,
     dashboard: DashboardModel?,
     isBusy: Boolean,
+    isReconnecting: Boolean = false,
     statusMessage: String?,
     onSetZoneOn: (String, Boolean) -> Unit,
     onSetAllZonesOn: (Boolean) -> Unit,
@@ -587,7 +606,19 @@ private fun ColumnScope.ConnectedPanel(
         return
     }
 
-    ConnectionLabelChip(label = connectionLabel)
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        ConnectionLabelChip(label = connectionLabel)
+        AnimatedVisibility(
+            visible = isReconnecting,
+            enter = fadeIn() + scaleIn(initialScale = 0.92f),
+            exit = fadeOut() + scaleOut(targetScale = 0.92f)
+        ) {
+            ReconnectingChip()
+        }
+    }
 
     AnimatedVisibility(
         visible = dashboard.healthReasons.isNotEmpty(),
@@ -615,6 +646,32 @@ private fun ColumnScope.ConnectedPanel(
     UnavailableControlsHint(dashboard = dashboard)
 
     statusMessage?.let { MessageCard(it) }
+}
+
+@Composable
+private fun ReconnectingChip() {
+    Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            CircularProgressIndicator(
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(12.dp),
+                color = MaterialTheme.colorScheme.onSecondaryContainer
+            )
+            Text(
+                "Reconnecting...",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
 }
 
 @Composable
