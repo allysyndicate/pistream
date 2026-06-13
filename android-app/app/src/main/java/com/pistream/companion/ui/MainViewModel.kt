@@ -3,10 +3,12 @@ package com.pistream.companion.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.pistream.companion.data.BluetoothScanResult
 import com.pistream.companion.data.OperationActionResult
 import com.pistream.companion.data.PairingAttempt
 import com.pistream.companion.data.PiNetworkDiscoverer
 import com.pistream.companion.data.PiRepository
+import com.pistream.companion.domain.BluetoothDeviceModel
 import com.pistream.companion.domain.ConnectionResult
 import com.pistream.companion.domain.DashboardModel
 import com.pistream.companion.domain.DiscoveredPi
@@ -302,6 +304,109 @@ class MainViewModel(
         viewModelScope.launch { runOperation { repository.reconnect(dashboard, speakerId) } }
     }
 
+    fun startAssignSpeaker(speakerId: String, label: String) {
+        val dashboard = state.value.dashboard ?: return
+        _state.update {
+            it.copy(
+                assignSpeaker = AssignSpeakerUiState(
+                    targetSpeakerId = speakerId,
+                    targetLabel = label,
+                    phase = AssignPhase.Scanning
+                )
+            )
+        }
+        viewModelScope.launch { runBluetoothScanForAssign(dashboard) }
+    }
+
+    fun rescanForAssign() {
+        val dashboard = state.value.dashboard ?: return
+        val assign = state.value.assignSpeaker ?: return
+        _state.update {
+            it.copy(
+                assignSpeaker = assign.copy(
+                    phase = AssignPhase.Scanning,
+                    devices = emptyList(),
+                    selectedAddress = null,
+                    message = null
+                )
+            )
+        }
+        viewModelScope.launch { runBluetoothScanForAssign(dashboard) }
+    }
+
+    fun selectDeviceForAssign(address: String) {
+        _state.update { current ->
+            val assign = current.assignSpeaker ?: return@update current
+            current.copy(assignSpeaker = assign.copy(selectedAddress = address, message = null))
+        }
+    }
+
+    fun assignSelectedSpeaker() {
+        val current = state.value
+        val dashboard = current.dashboard ?: return
+        val assign = current.assignSpeaker ?: return
+        val address = assign.selectedAddress ?: return
+        val device = assign.devices.firstOrNull { it.address == address } ?: return
+        _state.update {
+            it.copy(
+                assignSpeaker = assign.copy(phase = AssignPhase.Assigning, message = null),
+                isBusy = true
+            )
+        }
+        viewModelScope.launch {
+            val result = try {
+                repository.assignSpeaker(
+                    dashboard = dashboard,
+                    speakerId = assign.targetSpeakerId,
+                    address = device.address,
+                    displayName = device.name
+                )
+            } catch (exception: Exception) {
+                OperationActionResult(exception.message ?: "Assign failed.")
+            }
+            _state.update { now ->
+                if (result.dashboard != null) {
+                    now.copy(
+                        isBusy = false,
+                        dashboard = result.dashboard,
+                        assignSpeaker = null,
+                        statusMessage = result.message.ifBlank { null }
+                    )
+                } else {
+                    now.copy(
+                        isBusy = false,
+                        assignSpeaker = assign.copy(
+                            phase = AssignPhase.ShowingDevices,
+                            message = result.message.ifBlank { "Assign failed." }
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    fun cancelAssignSpeaker() {
+        _state.update { it.copy(assignSpeaker = null) }
+    }
+
+    private suspend fun runBluetoothScanForAssign(dashboard: DashboardModel) {
+        val result = try {
+            repository.scanBluetoothDevices(dashboard)
+        } catch (exception: Exception) {
+            BluetoothScanResult(exception.message ?: "Bluetooth scan failed.", null)
+        }
+        _state.update { current ->
+            val assign = current.assignSpeaker ?: return@update current
+            current.copy(
+                assignSpeaker = assign.copy(
+                    phase = AssignPhase.ShowingDevices,
+                    devices = result.devices.orEmpty(),
+                    message = if (result.devices == null) result.message else null
+                )
+            )
+        }
+    }
+
     private suspend fun runOperation(block: suspend () -> OperationActionResult) {
         _state.update { it.copy(isBusy = true, statusMessage = null) }
         val result = try {
@@ -348,7 +453,19 @@ data class HomeUiState(
     val manualHostInput: String = "",
     val manualTokenInput: String = "",
     val pairing: PairingUiState? = null,
-    val connectionLabel: ConnectionLabel = ConnectionLabel.None
+    val connectionLabel: ConnectionLabel = ConnectionLabel.None,
+    val assignSpeaker: AssignSpeakerUiState? = null
+)
+
+enum class AssignPhase { Scanning, ShowingDevices, Assigning }
+
+data class AssignSpeakerUiState(
+    val targetSpeakerId: String,
+    val targetLabel: String,
+    val phase: AssignPhase = AssignPhase.Scanning,
+    val devices: List<BluetoothDeviceModel> = emptyList(),
+    val selectedAddress: String? = null,
+    val message: String? = null
 )
 
 data class PairingUiState(

@@ -31,6 +31,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
@@ -44,6 +45,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
@@ -68,6 +70,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.pistream.companion.domain.BluetoothDeviceModel
 import com.pistream.companion.domain.ComponentRow
 import com.pistream.companion.domain.DashboardModel
 import com.pistream.companion.domain.DiscoveredPi
@@ -153,7 +156,12 @@ fun PiCompanionScreen(viewModel: MainViewModel) {
             onForget = viewModel::forgetPi,
             onSetZoneOn = viewModel::setZoneOn,
             onSetAllZonesOn = viewModel::setAllZones,
-            onReconnectSpeaker = viewModel::reconnectSpeaker
+            onReconnectSpeaker = viewModel::reconnectSpeaker,
+            onStartAssign = viewModel::startAssignSpeaker,
+            onCancelAssign = viewModel::cancelAssignSpeaker,
+            onSelectAssignDevice = viewModel::selectDeviceForAssign,
+            onConfirmAssign = viewModel::assignSelectedSpeaker,
+            onRescanAssign = viewModel::rescanForAssign
         )
     }
 }
@@ -175,7 +183,12 @@ private fun HomeBody(
     onForget: () -> Unit,
     onSetZoneOn: (String, Boolean) -> Unit,
     onSetAllZonesOn: (Boolean) -> Unit,
-    onReconnectSpeaker: (String) -> Unit
+    onReconnectSpeaker: (String) -> Unit,
+    onStartAssign: (String, String) -> Unit,
+    onCancelAssign: () -> Unit,
+    onSelectAssignDevice: (String) -> Unit,
+    onConfirmAssign: () -> Unit,
+    onRescanAssign: () -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -225,11 +238,21 @@ private fun HomeBody(
                         onSetZoneOn = onSetZoneOn,
                         onSetAllZonesOn = onSetAllZonesOn,
                         onReconnectSpeaker = onReconnectSpeaker,
+                        onStartAssign = onStartAssign,
                         onOpenSpotify = { openSpotify(context) }
                     )
                 }
                 Spacer(Modifier.height(16.dp))
             }
+        }
+        state.assignSpeaker?.let { assign ->
+            AssignSpeakerDialog(
+                state = assign,
+                onCancel = onCancelAssign,
+                onSelectDevice = onSelectAssignDevice,
+                onConfirm = onConfirmAssign,
+                onRescan = onRescanAssign
+            )
         }
     }
 }
@@ -556,6 +579,7 @@ private fun ColumnScope.ConnectedPanel(
     onSetZoneOn: (String, Boolean) -> Unit,
     onSetAllZonesOn: (Boolean) -> Unit,
     onReconnectSpeaker: (String) -> Unit,
+    onStartAssign: (String, String) -> Unit,
     onOpenSpotify: () -> Unit
 ) {
     if (dashboard == null) {
@@ -577,7 +601,8 @@ private fun ColumnScope.ConnectedPanel(
         dashboard = dashboard,
         isBusy = isBusy,
         onSetZoneOn = onSetZoneOn,
-        onReconnectSpeaker = onReconnectSpeaker
+        onReconnectSpeaker = onReconnectSpeaker,
+        onStartAssign = onStartAssign
     )
 
     WholeHouseCard(
@@ -622,14 +647,17 @@ private fun SpeakersList(
     dashboard: DashboardModel,
     isBusy: Boolean,
     onSetZoneOn: (String, Boolean) -> Unit,
-    onReconnectSpeaker: (String) -> Unit
+    onReconnectSpeaker: (String) -> Unit,
+    onStartAssign: (String, String) -> Unit
 ) {
     val canSetSystems = dashboard.canRunOperation("set_speaker_systems")
     val canReconnect = dashboard.canRunOperation("reconnect")
+    val canAssign = dashboard.canRunOperation("assign_speaker")
 
     Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
         dashboard.speakerSystems.forEach { system ->
             val speaker = dashboard.speakers.firstOrNull { matchesSystem(it.id, system.id) }
+            val assignTargetSpeakerId = speaker?.id ?: system.id
             SpeakerCard(
                 system = system,
                 speaker = speaker,
@@ -637,8 +665,10 @@ private fun SpeakersList(
                 isBusy = isBusy,
                 canToggle = canSetSystems,
                 canReconnect = canReconnect,
+                canAssign = canAssign,
                 onSetOn = { on -> onSetZoneOn(system.id, on) },
-                onReconnect = speaker?.let { { onReconnectSpeaker(it.id) } }
+                onReconnect = speaker?.let { { onReconnectSpeaker(it.id) } },
+                onAssign = { onStartAssign(assignTargetSpeakerId, system.label) }
             )
         }
 
@@ -668,8 +698,10 @@ private fun SpeakerCard(
     isBusy: Boolean,
     canToggle: Boolean,
     canReconnect: Boolean,
+    canAssign: Boolean,
     onSetOn: (Boolean) -> Unit,
-    onReconnect: (() -> Unit)?
+    onReconnect: (() -> Unit)?,
+    onAssign: () -> Unit
 ) {
     val readiness = system.systemReadiness()
     val speakerLive = speaker?.liveState() ?: SpeakerLiveState.UNKNOWN
@@ -781,6 +813,33 @@ private fun SpeakerCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+            }
+
+            if (canAssign) {
+                val needsAssignment = speaker == null || speakerLive == SpeakerLiveState.UNASSIGNED
+                val assignLabel = if (needsAssignment) {
+                    "Assign a Bluetooth speaker"
+                } else {
+                    "Change the assigned speaker"
+                }
+                if (needsAssignment) {
+                    PrimaryActionButton(
+                        text = assignLabel,
+                        onClick = onAssign,
+                        enabled = !isBusy,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                } else {
+                    OutlinedButton(
+                        onClick = onAssign,
+                        enabled = !isBusy,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(vertical = 12.dp)
+                    ) {
+                        Text(assignLabel)
+                    }
+                }
             }
 
             ReasonList(system.reasonCodes, onMutedSurface = !isPlaying)
@@ -1010,6 +1069,179 @@ private fun MessageCard(text: String) {
 }
 
 @Composable
+private fun AssignSpeakerDialog(
+    state: AssignSpeakerUiState,
+    onCancel: () -> Unit,
+    onSelectDevice: (String) -> Unit,
+    onConfirm: () -> Unit,
+    onRescan: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = {
+            if (state.phase != AssignPhase.Assigning) onCancel()
+        },
+        title = {
+            Text("Assign to ${state.targetLabel}", style = MaterialTheme.typography.titleLarge)
+        },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    "Pick a Bluetooth device the Pi can see. Pair it on the Pi first if it isn't listed.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                when (state.phase) {
+                    AssignPhase.Scanning -> AssignScanningRow()
+                    AssignPhase.Assigning -> AssignAssigningRow(label = state.targetLabel)
+                    AssignPhase.ShowingDevices -> AssignDeviceList(
+                        devices = state.devices,
+                        selectedAddress = state.selectedAddress,
+                        onSelectDevice = onSelectDevice
+                    )
+                }
+                state.message?.let {
+                    Text(
+                        it,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+                if (state.phase == AssignPhase.ShowingDevices) {
+                    OutlinedButton(
+                        onClick = onRescan,
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(vertical = 12.dp)
+                    ) {
+                        Text("Rescan")
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            val enabled = state.phase == AssignPhase.ShowingDevices && state.selectedAddress != null
+            TextButton(onClick = onConfirm, enabled = enabled) {
+                Text("Assign")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onCancel, enabled = state.phase != AssignPhase.Assigning) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+@Composable
+private fun AssignScanningRow() {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        CircularProgressIndicator(
+            strokeWidth = 2.dp,
+            modifier = Modifier.size(18.dp),
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            "Asking the Pi to scan Bluetooth...",
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun AssignAssigningRow(label: String) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp)
+    ) {
+        CircularProgressIndicator(
+            strokeWidth = 2.dp,
+            modifier = Modifier.size(18.dp),
+            color = MaterialTheme.colorScheme.primary
+        )
+        Text(
+            "Assigning to $label...",
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+@Composable
+private fun AssignDeviceList(
+    devices: List<BluetoothDeviceModel>,
+    selectedAddress: String?,
+    onSelectDevice: (String) -> Unit
+) {
+    if (devices.isEmpty()) {
+        Text(
+            "No Bluetooth devices visible to the Pi. Tap Rescan after pairing one on the Pi.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        devices.forEach { device ->
+            val selected = device.address == selectedAddress
+            Surface(
+                shape = RoundedCornerShape(14.dp),
+                color = if (selected) {
+                    MaterialTheme.colorScheme.primaryContainer
+                } else {
+                    MaterialTheme.colorScheme.surfaceVariant
+                },
+                contentColor = if (selected) {
+                    MaterialTheme.colorScheme.onPrimaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+                modifier = Modifier.fillMaxWidth(),
+                onClick = { onSelectDevice(device.address) }
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    RadioButton(
+                        selected = selected,
+                        onClick = { onSelectDevice(device.address) }
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            device.label,
+                            style = MaterialTheme.typography.bodyLarge,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            device.address,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        val tags = buildList {
+                            if (device.connected) add("Connected")
+                            if (device.paired) add("Paired")
+                            if (device.trusted) add("Trusted")
+                        }
+                        if (tags.isNotEmpty()) {
+                            Text(
+                                tags.joinToString(" · "),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun SoftCard(
     containerColor: Color = MaterialTheme.colorScheme.surface,
     contentColor: Color = MaterialTheme.colorScheme.onSurface,
@@ -1110,6 +1342,7 @@ private fun PreviewConnectedHealthy() {
             onSetZoneOn = { _, _ -> },
             onSetAllZonesOn = {},
             onReconnectSpeaker = {},
+            onStartAssign = { _, _ -> },
             onOpenSpotify = {}
         )
     }
@@ -1127,6 +1360,7 @@ private fun PreviewConnectedDemo() {
             onSetZoneOn = { _, _ -> },
             onSetAllZonesOn = {},
             onReconnectSpeaker = {},
+            onStartAssign = { _, _ -> },
             onOpenSpotify = {}
         )
     }
@@ -1163,6 +1397,7 @@ private fun PreviewConnectedDegraded() {
             onSetZoneOn = { _, _ -> },
             onSetAllZonesOn = {},
             onReconnectSpeaker = {},
+            onStartAssign = { _, _ -> },
             onOpenSpotify = {}
         )
     }
