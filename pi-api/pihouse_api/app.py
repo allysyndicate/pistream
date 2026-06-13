@@ -6,14 +6,18 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from .adapters import StubHardwareAdapter
+from .adapters import RealHardwareAdapter, StubHardwareAdapter
 from .auth import maybe_health_auth, require_bearer
 from .config import ROOT, load_config
 from .operations import (
+    AssignSpeakerRequest,
     OperationRequest,
     OperationStore,
+    PairSpeakerRequest,
     ReconnectRequest,
     RestartServiceRequest,
+    SelectRouteRequest,
+    SetSpeakerSystemsRequest,
     create_operation,
     validate_freshness,
 )
@@ -31,7 +35,14 @@ def error_body(code: str, message: str, details: dict | None = None) -> dict:
 def create_app() -> FastAPI:
     app = FastAPI(title="PiHouse Local API", version="1.0.0")
     app.state.config = load_config()
-    app.state.adapter = StubHardwareAdapter()
+    if app.state.config.adapterMode == "real":
+        app.state.adapter = RealHardwareAdapter(
+            app.state.config,
+            state_path=ROOT / ".state" / "audio-output.json",
+            assignments_path=ROOT / ".state" / "speaker-assignments.json",
+        )
+    else:
+        app.state.adapter = StubHardwareAdapter()
     app.state.operations = OperationStore(ROOT / ".state" / "operations.json")
 
     @app.exception_handler(HTTPException)
@@ -65,6 +76,12 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/status", dependencies=[Depends(require_bearer)])
     async def status_route(request: Request) -> dict:
         return {**status_payload(request.app.state.config, request.app.state.adapter, request.app.state.operations), "observedAt": observed_at()}
+
+    @app.get("/api/v1/bluetooth/devices", dependencies=[Depends(require_bearer)])
+    async def bluetooth_devices(request: Request, scanSeconds: int = 0) -> dict:
+        scan_seconds = max(0, min(scanSeconds, 20))
+        devices = request.app.state.adapter.discover_devices(scan_seconds)
+        return {"ok": True, "devices": devices, "scanSeconds": scan_seconds, "observedAt": observed_at()}
 
     def preflight_operation(request_obj: OperationRequest, request: Request) -> None:
         try:
@@ -101,6 +118,42 @@ def create_app() -> FastAPI:
             )
         try:
             record, created = create_operation(request.app.state.operations, request.app.state.adapter, request.app.state.config, "restart_service", payload)
+        except ValueError as exc:
+            return idempotency_error(exc)
+        return operation_response(record, created)
+
+    @app.post("/api/v1/operations/select-route", dependencies=[Depends(require_bearer)])
+    async def select_route(payload: SelectRouteRequest, request: Request) -> JSONResponse:
+        preflight_operation(payload, request)
+        try:
+            record, created = create_operation(request.app.state.operations, request.app.state.adapter, request.app.state.config, "select_route", payload)
+        except ValueError as exc:
+            return idempotency_error(exc)
+        return operation_response(record, created)
+
+    @app.post("/api/v1/operations/set-speaker-systems", dependencies=[Depends(require_bearer)])
+    async def set_speaker_systems(payload: SetSpeakerSystemsRequest, request: Request) -> JSONResponse:
+        preflight_operation(payload, request)
+        try:
+            record, created = create_operation(request.app.state.operations, request.app.state.adapter, request.app.state.config, "set_speaker_systems", payload)
+        except ValueError as exc:
+            return idempotency_error(exc)
+        return operation_response(record, created)
+
+    @app.post("/api/v1/operations/pair-speaker", dependencies=[Depends(require_bearer)])
+    async def pair_speaker(payload: PairSpeakerRequest, request: Request) -> JSONResponse:
+        preflight_operation(payload, request)
+        try:
+            record, created = create_operation(request.app.state.operations, request.app.state.adapter, request.app.state.config, "pair_speaker", payload)
+        except ValueError as exc:
+            return idempotency_error(exc)
+        return operation_response(record, created)
+
+    @app.post("/api/v1/operations/assign-speaker", dependencies=[Depends(require_bearer)])
+    async def assign_speaker(payload: AssignSpeakerRequest, request: Request) -> JSONResponse:
+        preflight_operation(payload, request)
+        try:
+            record, created = create_operation(request.app.state.operations, request.app.state.adapter, request.app.state.config, "assign_speaker", payload)
         except ValueError as exc:
             return idempotency_error(exc)
         return operation_response(record, created)

@@ -8,11 +8,21 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from .adapters import StubHardwareAdapter, utc_now
-from .config import AppConfig, ServiceId, SpeakerId
+from .adapters import AdapterCommandError, HardwareAdapter, utc_now
+from .config import AppConfig, ServiceId, SpeakerId, SpotifyEndpointId
 
 
-OperationType = Literal["reconnect", "restart_service", "run_watchdog"]
+OperationType = Literal[
+    "reconnect",
+    "restart_service",
+    "run_watchdog",
+    "select_route",
+    "set_speaker_systems",
+    "pair_speaker",
+    "assign_speaker",
+]
+RouteRequestId = Literal["indoor", "outdoor", "both", "whole_house"]
+MAC_PATTERN = r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$"
 
 
 class OperationRecord(BaseModel):
@@ -90,11 +100,54 @@ class RestartServiceRequest(OperationRequest):
     serviceId: ServiceId
 
 
+class SelectRouteRequest(OperationRequest):
+    routeId: RouteRequestId
+
+    @property
+    def canonical_route_id(self) -> SpotifyEndpointId:
+        if self.routeId == "whole_house":
+            return "both"
+        return self.routeId
+
+
+class SetSpeakerSystemsRequest(OperationRequest):
+    enabledSystemIds: list[SpeakerId]
+
+    @property
+    def canonical_enabled_system_ids(self) -> list[SpeakerId]:
+        return [system_id for system_id in ("indoor", "outdoor") if system_id in self.enabledSystemIds]
+
+
+class PairSpeakerRequest(OperationRequest):
+    address: str = Field(pattern=MAC_PATTERN)
+
+    @property
+    def canonical_address(self) -> str:
+        return self.address.upper()
+
+
+class AssignSpeakerRequest(OperationRequest):
+    speakerId: SpeakerId
+    address: str = Field(pattern=MAC_PATTERN)
+    displayName: str | None = Field(default=None, max_length=40)
+
+    @property
+    def canonical_address(self) -> str:
+        return self.address.upper()
+
+    @property
+    def canonical_display_name(self) -> str | None:
+        if self.displayName is None:
+            return None
+        cleaned = self.displayName.strip()
+        return cleaned or None
+
+
 def ensure_uuid(value: str) -> None:
     uuid.UUID(value)
 
 
-def validate_freshness(request: OperationRequest, adapter: StubHardwareAdapter, config: AppConfig) -> tuple[bool, dict[str, Any] | None]:
+def validate_freshness(request: OperationRequest, adapter: HardwareAdapter, config: AppConfig) -> tuple[bool, dict[str, Any] | None]:
     if request.observedBootId != adapter.boot_id:
         return False, {
             "code": "boot_changed",
@@ -119,12 +172,24 @@ def target_for(operation_type: OperationType, request: OperationRequest) -> dict
         return {"speakerId": getattr(request, "speakerId")}
     if operation_type == "restart_service":
         return {"serviceId": getattr(request, "serviceId")}
+    if operation_type == "select_route":
+        return {"routeId": getattr(request, "canonical_route_id")}
+    if operation_type == "set_speaker_systems":
+        return {"enabledSystemIds": getattr(request, "canonical_enabled_system_ids")}
+    if operation_type == "pair_speaker":
+        return {"address": getattr(request, "canonical_address")}
+    if operation_type == "assign_speaker":
+        return {
+            "speakerId": getattr(request, "speakerId"),
+            "address": getattr(request, "canonical_address"),
+            "displayName": getattr(request, "canonical_display_name"),
+        }
     return {}
 
 
 def create_operation(
     store: OperationStore,
-    adapter: StubHardwareAdapter,
+    adapter: HardwareAdapter,
     config: AppConfig,
     operation_type: OperationType,
     request: OperationRequest,
@@ -154,10 +219,29 @@ def create_operation(
             record.result = adapter.reconnect_speaker(getattr(request, "speakerId"))
         elif operation_type == "restart_service":
             record.result = adapter.restart_service(config, getattr(request, "serviceId"))
+        elif operation_type == "select_route":
+            record.result = adapter.select_route(config, getattr(request, "canonical_route_id"))
+        elif operation_type == "set_speaker_systems":
+            record.result = adapter.set_speaker_systems(getattr(request, "canonical_enabled_system_ids"))
+        elif operation_type == "pair_speaker":
+            record.result = adapter.pair_speaker(getattr(request, "canonical_address"))
+        elif operation_type == "assign_speaker":
+            record.result = adapter.assign_speaker(
+                getattr(request, "speakerId"),
+                getattr(request, "canonical_address"),
+                getattr(request, "canonical_display_name"),
+            )
         else:
             record.result = adapter.run_watchdog(config)
         record.status = "succeeded"
-    except Exception as exc:  # pragma: no cover - real adapters will narrow this.
+    except AdapterCommandError as exc:
+        record.status = "failed"
+        record.error = {
+            "code": exc.code,
+            "message": str(exc),
+            "details": {},
+        }
+    except Exception as exc:
         record.status = "failed"
         record.error = {
             "code": "operation_failed",

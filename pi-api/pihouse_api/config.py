@@ -27,10 +27,12 @@ SpotifyEndpointId = Literal["indoor", "outdoor", "both"]
 class SpeakerConfig(BaseModel):
     displayName: str
     sinkId: SinkId
+    mac: str | None = None
 
 
 class SinkConfig(BaseModel):
     displayName: str
+    name: str | None = None
 
 
 class ServiceConfig(BaseModel):
@@ -58,6 +60,7 @@ class AppConfig(BaseModel):
     apiVersion: str = "1.0.0"
     contractVersion: Literal["2026-06-phase3"] = "2026-06-phase3"
     tokenFile: str
+    adapterMode: Literal["stub", "real"] = "stub"
     healthRequiresAuth: bool = False
     freshnessWindowSeconds: int = Field(default=120, ge=10, le=900)
     restartServiceMode: Literal["advanced"] = "advanced"
@@ -86,6 +89,16 @@ class AppConfig(BaseModel):
             raise ValueError("services must contain the Phase 3 service allowlist")
         if set(self.spotifyEndpoints) != {"indoor", "outdoor", "both"}:
             raise ValueError("spotifyEndpoints must contain indoor, outdoor, and both")
+        return self
+
+    @model_validator(mode="after")
+    def require_real_adapter_values(self) -> "AppConfig":
+        if self.adapterMode != "real":
+            return self
+        # Speaker MACs may come from config or from app-driven assignment; only
+        # the whole-house combine sink needs a fixed PipeWire node name.
+        if not self.sinks["whole_house"].name:
+            raise ValueError("sink 'whole_house' needs a PipeWire sink name when adapterMode is real")
         return self
 
     @property

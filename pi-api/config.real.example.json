@@ -1,0 +1,92 @@
+{
+  "deviceId": "pihouse-audio-01",
+  "controllerInstanceId": "ctrl_01JXYZPIHOUSEAUDIO",
+  "hostname": "audiopi",
+  "apiName": "pihouse-audio-api",
+  "apiVersion": "1.0.0",
+  "contractVersion": "2026-06-phase3",
+  "tokenFile": "/home/pi/.config/pihouse-api/token",
+  "adapterMode": "real",
+  "healthRequiresAuth": false,
+  "freshnessWindowSeconds": 120,
+  "restartServiceMode": "advanced",
+  "speakers": {
+    "indoor": {
+      "displayName": "Indoor",
+      "sinkId": "indoor",
+      "mac": null
+    },
+    "outdoor": {
+      "displayName": "Outdoor",
+      "sinkId": "outdoor",
+      "mac": null
+    }
+  },
+  "sinks": {
+    "indoor": {
+      "displayName": "Indoor Sink",
+      "name": null
+    },
+    "outdoor": {
+      "displayName": "Outdoor Sink",
+      "name": null
+    },
+    "whole_house": {
+      "displayName": "Whole House Sink",
+      "name": "whole_house"
+    }
+  },
+  "services": {
+    "pipewire": {
+      "displayName": "PipeWire",
+      "unit": "pipewire",
+      "restartAllowed": true
+    },
+    "wireplumber": {
+      "displayName": "WirePlumber",
+      "unit": "wireplumber",
+      "restartAllowed": true
+    },
+    "librespot_indoor": {
+      "displayName": "Spotify Indoor",
+      "unit": "librespot@indoor",
+      "restartAllowed": true
+    },
+    "librespot_outdoor": {
+      "displayName": "Spotify Outdoor",
+      "unit": "librespot@outdoor",
+      "restartAllowed": true
+    },
+    "librespot_both": {
+      "displayName": "Spotify Whole House",
+      "unit": "librespot@both",
+      "restartAllowed": true
+    },
+    "bt_watchdog": {
+      "displayName": "Bluetooth Watchdog",
+      "unit": "bt-watchdog",
+      "restartAllowed": true
+    }
+  },
+  "spotifyEndpoints": {
+    "indoor": {
+      "displayName": "Indoor",
+      "serviceId": "librespot_indoor",
+      "sinkId": "indoor"
+    },
+    "outdoor": {
+      "displayName": "Outdoor",
+      "serviceId": "librespot_outdoor",
+      "sinkId": "outdoor"
+    },
+    "both": {
+      "displayName": "Whole House",
+      "serviceId": "librespot_both",
+      "sinkId": "whole_house"
+    }
+  },
+  "spotifyIntegration": {
+    "mode": "connect_status_handoff",
+    "webApiEnabled": false
+  }
+}
