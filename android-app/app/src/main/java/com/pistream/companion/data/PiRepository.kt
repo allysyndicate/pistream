@@ -111,7 +111,39 @@ class PiRepository(
     }
 
     suspend fun refresh(dashboard: DashboardModel): OperationActionResult {
-        return when (val result = apiClient.status(piBaseUrl(dashboard.host), tokenStore.loadToken())) {
+        val baseUrl = piBaseUrl(dashboard.host)
+        val savedIdentity = savedPiStore.savedPi.first()?.identity
+
+        // RC-08: a swapped Pi at the same IP/host can hold the saved bearer's hash but
+        // serve a different `deviceId`. `/status` alone wouldn't catch that — `/identity`
+        // does. Cold restart already verifies this via `connect()`; warm refresh did not.
+        if (savedIdentity != null) {
+            when (val result = apiClient.identity(baseUrl)) {
+                is ApiCallResult.Success -> {
+                    if (!result.value.isCompatible()) {
+                        return OperationActionResult(
+                            message = "Unsupported Pi API contract or version.",
+                            dashboard = null,
+                            failureCode = "api_unavailable"
+                        )
+                    }
+                    if (!result.value.matchesSaved(savedIdentity)) {
+                        return OperationActionResult(
+                            message = "Host ${dashboard.host} now reports a different Pi identity.",
+                            dashboard = null,
+                            failureCode = "wrong_device"
+                        )
+                    }
+                }
+                is ApiCallResult.Failure -> return OperationActionResult(
+                    message = "${result.code}: ${result.message}",
+                    dashboard = null,
+                    failureCode = result.code
+                )
+            }
+        }
+
+        return when (val result = apiClient.status(baseUrl, tokenStore.loadToken())) {
             is ApiCallResult.Success -> OperationActionResult(
                 message = "Status refreshed.",
                 dashboard = result.value.toDashboard(dashboard.host)

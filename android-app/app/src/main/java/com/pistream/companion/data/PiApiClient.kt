@@ -142,7 +142,18 @@ class PiApiClient {
             contentType(ContentType.Application.Json)
             setBody(body)
         }
-        if (!response.status.isSuccess()) return response.status.toApiError()
+        if (!response.status.isSuccess()) {
+            // 409 distinguishes `boot_changed` from `stale_observation` in the body.
+            // The HTTP-status fallback collapses both to `stale_observation`, which makes
+            // a real Pi reboot look like a status-cache miss. Prefer the body code.
+            val envelope = runCatching { response.body<ApiEnvelope<OperationDto>>() }.getOrNull()
+            val error = envelope?.error
+            return if (error != null) {
+                ApiCallResult.Failure(error.code, error.message)
+            } else {
+                response.status.toApiError()
+            }
+        }
         val envelope = response.body<ApiEnvelope<OperationDto>>()
         return envelope.operation?.let { operation -> ApiCallResult.Success(operation) }
             ?: ApiCallResult.Failure("api_unavailable", "Missing operation payload.")

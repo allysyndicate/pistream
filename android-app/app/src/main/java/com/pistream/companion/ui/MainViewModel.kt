@@ -29,6 +29,24 @@ class MainViewModel(
     val state: StateFlow<HomeUiState> = _state.asStateFlow()
 
     private var discoveryJob: Job? = null
+    private var resumeJob: Job? = null
+    private var postConnectSettleJob: Job? = null
+
+    // Bounded retry policy for saved-token reconnect. Tuned for Wi-Fi handoff after a
+    // screen-off / wake (~1-2s for DHCP) and short Pi API restarts (~3-4s for uvicorn
+    // to come back). ~5.7s total budget keeps the user from staring at a spinner.
+    private val reconnectBackoffMillis = longArrayOf(700L, 1_500L, 3_500L)
+
+    // After a successful reconnect, re-poll status once or twice with short backoff so a
+    // transient `degraded` health reading (audio-service starting up post-resume) doesn't
+    // freeze on the dashboard as a permanent banner.
+    private val postConnectSettleBackoffMillis = longArrayOf(1_500L, 4_000L)
+
+    // Skip a resume-triggered reconnect if we just finished one — Compose can drive several
+    // ON_RESUME callbacks in rapid succession during recreate, and we don't want to thrash
+    // the network.
+    private var lastSuccessfulConnectAtMs: Long = 0L
+    private val resumeRefreshDebounceMs: Long = 3_000L
 
     init {
         bootstrap()
@@ -72,16 +90,40 @@ class MainViewModel(
             )
         }
         var result = repository.connect(host, token)
-        // A brief Wi-Fi handoff or Pi API restart surfaces as IOException → NotFound.
-        // Swallow one of those before tossing the user to a Failed screen.
-        if (result is ConnectionResult.NotFound) {
-            delay(700)
+        // Wi-Fi wake/roam and Pi API restarts surface as IOException → NotFound or
+        // ApiUnavailable. Retry with bounded backoff before tossing the user to Failed.
+        // Auth/identity outcomes are deterministic — don't retry those.
+        for (delayMs in reconnectBackoffMillis) {
+            if (!result.isRetryable()) break
+            delay(delayMs)
             result = repository.connect(host, token)
         }
         applyConnectionResult(host, result)
     }
 
+    private fun ConnectionResult.isRetryable(): Boolean = when (this) {
+        ConnectionResult.NotFound,
+        is ConnectionResult.ApiUnavailable -> true
+        is ConnectionResult.FoundHealthy,
+        is ConnectionResult.FoundDemo,
+        is ConnectionResult.FoundUnhealthy,
+        is ConnectionResult.WrongDevice,
+        is ConnectionResult.Unauthorized -> false
+    }
+
     private fun applyConnectionResult(host: String, result: ConnectionResult) {
+        // Any terminal connection outcome cancels a pending settle pass; we'll start a
+        // new one for healthy/demo/unhealthy cases below.
+        postConnectSettleJob?.cancel()
+        postConnectSettleJob = null
+
+        if (result is ConnectionResult.FoundHealthy ||
+            result is ConnectionResult.FoundDemo ||
+            result is ConnectionResult.FoundUnhealthy
+        ) {
+            lastSuccessfulConnectAtMs = System.currentTimeMillis()
+        }
+
         _state.update { current ->
             when (result) {
                 is ConnectionResult.FoundHealthy -> current.copy(
@@ -138,6 +180,63 @@ class MainViewModel(
                 )
             }
         }
+
+        when (result) {
+            is ConnectionResult.FoundHealthy,
+            is ConnectionResult.FoundDemo,
+            is ConnectionResult.FoundUnhealthy -> startPostConnectSettle()
+            else -> Unit
+        }
+    }
+
+    private fun startPostConnectSettle() {
+        postConnectSettleJob?.cancel()
+        postConnectSettleJob = viewModelScope.launch {
+            for (delayMs in postConnectSettleBackoffMillis) {
+                delay(delayMs)
+                val dashboard = state.value.dashboard ?: return@launch
+                val refreshed = try {
+                    repository.refresh(dashboard)
+                } catch (_: Exception) {
+                    return@launch
+                }
+                val next = refreshed.dashboard ?: continue
+                _state.update { current ->
+                    val staleMessage = current.statusMessage == "Pi is reachable but reports degraded health."
+                    val label = current.connectionLabel
+                    val nextLabel = when {
+                        label is ConnectionLabel.Degraded && next.healthState == "healthy" ->
+                            ConnectionLabel.Connected(label.host)
+                        else -> label
+                    }
+                    current.copy(
+                        dashboard = next,
+                        connectionLabel = nextLabel,
+                        statusMessage = if (staleMessage && next.healthState == "healthy") null else current.statusMessage
+                    )
+                }
+            }
+        }
+    }
+
+    fun onAppResumed() {
+        // RC-02: Compose lifecycle ON_RESUME hook. Re-validate the saved Pi without
+        // blanking the dashboard or showing the Failed card unless the bounded retry
+        // policy actually fails. We debounce so a quick recreate (orientation change,
+        // theme switch) doesn't immediately bombard the Pi.
+        val now = System.currentTimeMillis()
+        if (now - lastSuccessfulConnectAtMs < resumeRefreshDebounceMs) return
+        if (state.value.isReconnecting) return
+        val stage = state.value.stage
+        // Only auto-reconnect when we're on a saved-Pi panel. Pairing flows, the empty
+        // splash, and the Discovery sheet drive their own network traffic and shouldn't
+        // be interrupted.
+        if (stage != HomeStage.Connected && stage != HomeStage.ConnectionFailed) return
+        val host = state.value.savedHost ?: return
+        val token = repository.savedToken()
+        if (token.isBlank()) return
+        resumeJob?.cancel()
+        resumeJob = viewModelScope.launch { attemptConnect(host, token) }
     }
 
     fun retrySavedConnection() {
@@ -303,6 +402,9 @@ class MainViewModel(
 
     fun forgetPi() {
         stopDiscovery()
+        resumeJob?.cancel()
+        postConnectSettleJob?.cancel()
+        lastSuccessfulConnectAtMs = 0L
         viewModelScope.launch {
             repository.forgetPi()
             _state.update {
@@ -447,20 +549,49 @@ class MainViewModel(
         } catch (exception: Exception) {
             OperationActionResult(exception.message ?: "Operation failed.")
         }
-        // A 401 during refresh or any other operation means the saved token is stale —
-        // demote to ConnectionFailed instead of silently painting an error banner over
-        // a screen that still claims it's Connected.
-        if (result.failureCode == "unauthorized") {
-            _state.update {
-                it.copy(
-                    isBusy = false,
-                    isReconnecting = false,
-                    stage = HomeStage.ConnectionFailed,
-                    connectionLabel = ConnectionLabel.Failed,
-                    statusMessage = "Pi rejected the saved pairing token. Forget this Pi and pair again."
-                )
+        when (result.failureCode) {
+            // A 401 during refresh or any other operation means the saved token is stale —
+            // demote to ConnectionFailed instead of silently painting an error banner over
+            // a screen that still claims it's Connected.
+            "unauthorized" -> {
+                _state.update {
+                    it.copy(
+                        isBusy = false,
+                        isReconnecting = false,
+                        stage = HomeStage.ConnectionFailed,
+                        connectionLabel = ConnectionLabel.Failed,
+                        statusMessage = "Pi rejected the saved pairing token. Forget this Pi and pair again."
+                    )
+                }
+                return
             }
-            return
+            // RC-08: the warm-refresh identity check caught a swapped Pi at the same host.
+            "wrong_device" -> {
+                _state.update {
+                    it.copy(
+                        isBusy = false,
+                        isReconnecting = false,
+                        stage = HomeStage.ConnectionFailed,
+                        connectionLabel = ConnectionLabel.Failed,
+                        statusMessage = result.message.ifBlank {
+                            "This host now reports a different Pi identity. Forget this Pi to pair the new one."
+                        }
+                    )
+                }
+                return
+            }
+            // The Pi rebooted between observation and the operation. Auto-refresh status so
+            // the user can retry without reading a cryptic 409.
+            "boot_changed" -> {
+                _state.update {
+                    it.copy(
+                        isBusy = false,
+                        statusMessage = "Pi rebooted — refreshing status."
+                    )
+                }
+                refreshStatus()
+                return
+            }
         }
         _state.update {
             it.copy(
@@ -477,6 +608,8 @@ class MainViewModel(
 
     override fun onCleared() {
         stopDiscovery()
+        resumeJob?.cancel()
+        postConnectSettleJob?.cancel()
         super.onCleared()
     }
 }

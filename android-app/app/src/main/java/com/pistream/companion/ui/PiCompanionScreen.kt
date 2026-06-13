@@ -69,6 +69,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pistream.companion.domain.BluetoothDeviceModel
 import com.pistream.companion.domain.ComponentRow
@@ -92,6 +93,14 @@ fun PiCompanionScreen(viewModel: MainViewModel) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var overflowOpen by remember { mutableStateOf(false) }
+
+    // RC-02: every foreground transition runs a bounded reconnect/refresh on the saved
+    // Pi. ViewModel debounces repeat calls so an orientation-change recreate doesn't
+    // hammer the network.
+    LifecycleResumeEffect(Unit) {
+        viewModel.onAppResumed()
+        onPauseOrDispose { }
+    }
 
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
