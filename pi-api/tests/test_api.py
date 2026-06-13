@@ -417,3 +417,19 @@ def test_select_route_compatibility_updates_speaker_systems() -> None:
         updated_status = client.get("/api/v1/status", headers=AUTH).json()
         assert updated_status["audioOutput"]["enabledSystemIds"] == expected_system_ids
         status_body = updated_status
+
+
+def test_config_without_adapter_mode_refuses_to_load() -> None:
+    import json
+    from pathlib import Path
+
+    import pytest
+
+    from pihouse_api.config import AppConfig
+
+    raw = json.loads(Path("config.example.json").read_text(encoding="utf-8"))
+    raw.pop("adapterMode", None)
+    with pytest.raises(Exception) as info:
+        AppConfig.model_validate(raw)
+    # Pydantic surfaces a "missing" field error for the required adapterMode.
+    assert "adapterMode" in str(info.value)

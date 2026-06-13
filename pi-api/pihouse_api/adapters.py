@@ -334,6 +334,22 @@ class RealHardwareAdapter:
     BLUETOOTH_TIMEOUT = 15.0
     CACHE_TTL = 1.0
 
+    LIBRESPOT_UNIT_BODY = (
+        "[Unit]\n"
+        "Description=librespot (%i)\n"
+        "After=pipewire.service network-online.target\n"
+        "\n"
+        "[Service]\n"
+        "EnvironmentFile=%h/.config/librespot/%i.env\n"
+        "ExecStart=/usr/bin/librespot --backend pulseaudio "
+        "--name \"${SPEAKER_NAME}\" --bitrate 320 --disable-audio-cache\n"
+        "Restart=always\n"
+        "RestartSec=5\n"
+        "\n"
+        "[Install]\n"
+        "WantedBy=default.target\n"
+    )
+
     def __init__(
         self,
         config: AppConfig,
@@ -344,6 +360,7 @@ class RealHardwareAdapter:
         assignments_path: Path | None = None,
         librespot_env_dir: Path | None = None,
         combine_conf_path: Path | None = None,
+        user_systemd_dir: Path | None = None,
     ) -> None:
         self.config = config
         self.runner = runner
@@ -353,6 +370,7 @@ class RealHardwareAdapter:
         self.assignments = SpeakerAssignments(assignments_path)
         self.librespot_env_dir = librespot_env_dir or Path.home() / ".config" / "librespot"
         self.combine_conf_path = combine_conf_path or Path.home() / ".config" / "pipewire" / "pipewire.conf.d" / "combine.conf"
+        self.user_systemd_dir = user_systemd_dir or Path.home() / ".config" / "systemd" / "user"
         self._boot_id: str | None = None
         self._boot_time: datetime | None = None
         self._cache: dict[object, tuple[float, object]] = {}
@@ -550,7 +568,23 @@ class RealHardwareAdapter:
         display_name = (assignment or {}).get("displayName") or self.config.speakers[speaker_id].displayName
         return display_name, self._sink_name_for_mac(mac)
 
+    def _ensure_librespot_unit(self) -> None:
+        """Seed the user-level librespot@.service template if missing.
+
+        setup-pi.sh writes this file at install time. The adapter re-creates it
+        when missing so an app-driven assign/route flow keeps working even if
+        the operator wiped ~/.config/systemd/user without re-running setup.
+        """
+        unit_path = self.user_systemd_dir / "librespot@.service"
+        if unit_path.exists():
+            return
+        self.user_systemd_dir.mkdir(parents=True, exist_ok=True)
+        unit_path.write_text(self.LIBRESPOT_UNIT_BODY, encoding="utf-8")
+        # Pick up the freshly written template before any later restart call.
+        self.runner(["systemctl", "--user", "daemon-reload"], self.COMMAND_TIMEOUT)
+
     def _write_audio_config_files(self) -> None:
+        self._ensure_librespot_unit()
         zone_values = {speaker_id: self._zone_env_values(speaker_id) for speaker_id in SYSTEM_ORDER}
         self.librespot_env_dir.mkdir(parents=True, exist_ok=True)
         for speaker_id, values in zone_values.items():
@@ -779,6 +813,9 @@ class RealHardwareAdapter:
         desired = set(enabled_system_ids)
         self._desired_system_ids = desired
         self._save_desired(desired)
+        # Without this template, "systemctl --user start librespot@indoor" would
+        # fail with "Unit librespot@indoor.service not found".
+        self._ensure_librespot_unit()
         failures: list[str] = []
         for endpoint_id, members in ENDPOINT_MEMBER_SYSTEMS.items():
             service_id = ENDPOINT_SERVICE_IDS[endpoint_id]

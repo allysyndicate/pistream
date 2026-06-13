@@ -60,7 +60,10 @@ class AppConfig(BaseModel):
     apiVersion: str = "1.0.0"
     contractVersion: Literal["2026-06-phase3"] = "2026-06-phase3"
     tokenFile: str
-    adapterMode: Literal["stub", "real"] = "stub"
+    # No default: an unconfigured deploy must refuse to start instead of
+    # silently running in-memory stub. setup-pi.sh ships config.real.example.json
+    # which sets this to "real"; the local dev config sets it to "stub".
+    adapterMode: Literal["stub", "real"]
     healthRequiresAuth: bool = False
     freshnessWindowSeconds: int = Field(default=120, ge=10, le=900)
     restartServiceMode: Literal["advanced"] = "advanced"

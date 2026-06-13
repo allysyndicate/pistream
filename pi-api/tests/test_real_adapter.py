@@ -162,6 +162,7 @@ def adapter(config: AppConfig, hardware: FakeHardware, tmp_path) -> RealHardware
         assignments_path=tmp_path / "speaker-assignments.json",
         librespot_env_dir=tmp_path / "librespot",
         combine_conf_path=tmp_path / "pipewire.conf.d" / "combine.conf",
+        user_systemd_dir=tmp_path / "systemd-user",
     )
 
 
@@ -412,8 +413,33 @@ def test_assign_speaker_updates_state_and_audio_config(adapter: RealHardwareAdap
         assignments_path=tmp_path / "speaker-assignments.json",
         librespot_env_dir=tmp_path / "librespot",
         combine_conf_path=tmp_path / "pipewire.conf.d" / "combine.conf",
+        user_systemd_dir=tmp_path / "systemd-user",
     )
     assert reloaded._speaker_mac("outdoor") == NEW_MAC
+
+
+def test_assign_speaker_self_heals_missing_librespot_unit(
+    adapter: RealHardwareAdapter, hardware: FakeHardware, tmp_path
+) -> None:
+    unit_path = tmp_path / "systemd-user" / "librespot@.service"
+    assert not unit_path.exists()
+    adapter.assign_speaker("indoor", INDOOR_MAC, None)
+    assert unit_path.exists()
+    body = unit_path.read_text(encoding="utf-8")
+    assert "[Unit]" in body
+    assert "EnvironmentFile=%h/.config/librespot/%i.env" in body
+    # daemon-reload runs so the freshly written template is picked up before
+    # any later systemctl --user start/restart from the adapter.
+    assert ["systemctl", "--user", "daemon-reload"] in hardware.calls
+
+
+def test_set_speaker_systems_self_heals_missing_librespot_unit(
+    adapter: RealHardwareAdapter, hardware: FakeHardware, tmp_path
+) -> None:
+    unit_path = tmp_path / "systemd-user" / "librespot@.service"
+    assert not unit_path.exists()
+    adapter.set_speaker_systems(["indoor"])
+    assert unit_path.exists()
 
 
 def test_assign_speaker_restarts_running_endpoints(adapter: RealHardwareAdapter, hardware: FakeHardware) -> None:

@@ -4,11 +4,14 @@ Runnable FastAPI service for the Phase 3 Raspberry Pi local API contract.
 
 Two adapter modes are available via `adapterMode` in the config:
 
-- `stub` (default): hardware behavior is simulated. Use for development off
-  the Pi and for the contract test suite.
+- `stub`: hardware behavior is simulated. Use for development off the Pi and
+  for the contract test suite. `config.example.json` ships with this mode.
 - `real`: the service drives the actual Pi audio stack through allowlisted
   argument-array commands only (`systemctl --user`, `bluetoothctl`, `pactl`,
   and `/proc` reads). Use this on the Raspberry Pi.
+
+`adapterMode` is a required field. A config without it refuses to load so an
+unconfigured deploy never silently runs stub mode.
 
 In real mode, enabling speaker systems maps to the librespot Spotify Connect
 endpoint services: a Spotify endpoint runs only when every speaker system it
@@ -106,6 +109,20 @@ If `adapterMode` ever reports `stub` from a real Pi, the active config at
 `~/.config/pihouse-api/config.json` is wrong - either the file is missing
 `"adapterMode": "real"` or `setup-pi.sh` was never run. Fix the config and
 restart `pihouse-api.service`.
+
+### Preflight Diagnostics
+
+To see exactly which Pi-side preconditions are missing on the host (apt
+packages, systemd user units, linger, librespot, combine sink, active config,
+token, `librespot@.service` template):
+
+```bash
+python -m pihouse_api.bootstrap
+```
+
+The preflight exits 0 when everything required is present and prints a
+per-check `OK`/`WARN`/`MISSING` summary. It runs from any working directory
+and probes the host using the same kinds of checks the real adapter would do.
 
 ## Pi Notes
 

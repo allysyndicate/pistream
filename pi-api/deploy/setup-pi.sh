@@ -302,8 +302,24 @@ install_python_env
 install_api_service
 start_user_units
 
+HOST_NAME="$(hostname 2>/dev/null || true)"
+PRIMARY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+TOKEN_VALUE="$(tr -d '\r\n' < "${TOKEN_FILE}" 2>/dev/null || true)"
+
 cat <<EOF
 [setup-pi] Done.
+
+================================================================================
+Mobile connection info (paste/scan into the Android app):
+
+  host (mDNS) : ${HOST_NAME:-<set hostname>}.local
+  host (IP)   : ${PRIMARY_IP:-<no IPv4 detected>}
+  port        : 8765
+  bearer      : ${TOKEN_VALUE:-<token file missing>}
+
+Token file on disk : ${TOKEN_FILE}
+Active config      : ${ACTIVE_CONFIG} (adapterMode=real)
+================================================================================
 
 Next steps that the script intentionally does NOT do (they require physical
 hardware or operator decisions):
@@ -318,6 +334,9 @@ Smoke checks:
   curl http://127.0.0.1:8765/api/v1/health
   curl -H "Authorization: Bearer \$(cat ${TOKEN_FILE})" \\
        http://127.0.0.1:8765/api/v1/status | python3 -c "import json,sys; b=json.load(sys.stdin); print('adapterMode=', b.get('adapterMode'))"
+
+Preflight (re-run any time to find what is missing on this Pi):
+  ${PI_API_DIR}/.venv/bin/python -m pihouse_api.bootstrap
 
 The status payload now exposes a top-level "adapterMode" field. If it ever
 prints "stub" on this Pi, the active config at ${ACTIVE_CONFIG} is not the real

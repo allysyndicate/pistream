@@ -6,6 +6,7 @@
   "apiVersion": "1.0.0",
   "contractVersion": "2026-06-phase3",
   "tokenFile": "token.example",
+  "adapterMode": "stub",
   "healthRequiresAuth": false,
   "freshnessWindowSeconds": 120,
   "restartServiceMode": "advanced",
