@@ -92,10 +92,10 @@ class PiRepository(
             savedPiStore.save(host, identity.toTrustedIdentity())
 
             val dashboard = status.copy(health = status.health ?: health).toDashboard(host)
-            if (dashboard.healthState == "healthy") {
-                ConnectionResult.FoundHealthy(dashboard)
-            } else {
-                ConnectionResult.FoundUnhealthy(dashboard)
+            when {
+                dashboard.isDemoMode -> ConnectionResult.FoundDemo(dashboard)
+                dashboard.healthState == "healthy" -> ConnectionResult.FoundHealthy(dashboard)
+                else -> ConnectionResult.FoundUnhealthy(dashboard)
             }
         } catch (exception: IOException) {
             ConnectionResult.NotFound

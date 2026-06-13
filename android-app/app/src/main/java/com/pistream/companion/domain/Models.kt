@@ -109,6 +109,7 @@ data class DiscoveredPi(
 sealed interface ConnectionResult {
     data class FoundHealthy(val dashboard: DashboardModel) : ConnectionResult
     data class FoundUnhealthy(val dashboard: DashboardModel) : ConnectionResult
+    data class FoundDemo(val dashboard: DashboardModel) : ConnectionResult
     data class WrongDevice(val host: String, val summary: String?) : ConnectionResult
     data class ApiUnavailable(val host: String, val cause: String) : ConnectionResult
     data class Unauthorized(val host: String) : ConnectionResult

@@ -4,6 +4,16 @@ import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,11 +26,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -35,6 +47,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
+import androidx.compose.material3.SwitchDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -51,6 +64,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -66,6 +80,8 @@ import com.pistream.companion.domain.TrustedIdentity
 import com.pistream.companion.domain.liveState
 import com.pistream.companion.domain.plainEnglishStatus
 import com.pistream.companion.domain.systemReadiness
+import com.pistream.companion.ui.theme.PiPalette
+import com.pistream.companion.ui.theme.PiStreamTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -75,9 +91,16 @@ fun PiCompanionScreen(viewModel: MainViewModel) {
     var overflowOpen by remember { mutableStateOf(false) }
 
     Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
         topBar = {
             TopAppBar(
-                title = { Text("Speakers") },
+                title = {
+                    Text(
+                        "Speakers",
+                        style = MaterialTheme.typography.headlineMedium,
+                        fontWeight = FontWeight.Bold
+                    )
+                },
                 actions = {
                     if (state.stage == HomeStage.Connected || state.stage == HomeStage.ConnectionFailed) {
                         Box {
@@ -108,7 +131,8 @@ fun PiCompanionScreen(viewModel: MainViewModel) {
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.surface
+                    containerColor = MaterialTheme.colorScheme.background,
+                    titleContentColor = MaterialTheme.colorScheme.onBackground
                 )
             )
         }
@@ -151,85 +175,135 @@ private fun HomeBody(
     onSetAllZonesOn: (Boolean) -> Unit,
     onReconnectSpeaker: (String) -> Unit
 ) {
-    Column(
+    Box(
         modifier = Modifier
             .fillMaxSize()
             .padding(padding)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        when (state.stage) {
-            HomeStage.Connecting -> ConnectingPanel()
-            HomeStage.Empty -> EmptyPanel(onConnect = onConnect)
-            HomeStage.ConnectionFailed -> ConnectionFailedPanel(
-                host = state.savedHost,
-                message = state.statusMessage,
-                onRetry = onRetry,
-                onForget = onForget
-            )
-            HomeStage.Discovering -> DiscoveryPanel(
-                discoveredPis = state.discoveredPis,
-                manualHostInput = state.manualHostInput,
-                manualTokenInput = state.manualTokenInput,
-                pairing = state.pairing,
-                statusMessage = state.statusMessage,
-                onChooseDiscovered = onChooseDiscovered,
-                onUpdateManualHost = onUpdateManualHost,
-                onSubmitManualHost = onSubmitManualHost,
-                onUpdateManualToken = onUpdateManualToken,
-                onSubmitManualToken = onSubmitManualToken,
-                onCancel = onCancelConnect
-            )
-            HomeStage.Connected -> ConnectedPanel(
-                dashboard = state.dashboard,
-                isBusy = state.isBusy,
-                statusMessage = state.statusMessage,
-                onSetZoneOn = onSetZoneOn,
-                onSetAllZonesOn = onSetAllZonesOn,
-                onReconnectSpeaker = onReconnectSpeaker,
-                onOpenSpotify = { openSpotify(context) }
-            )
+        Crossfade(
+            targetState = state.stage,
+            animationSpec = tween(durationMillis = 260),
+            label = "home-stage"
+        ) { stage ->
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp)
+            ) {
+                when (stage) {
+                    HomeStage.Connecting -> ConnectingPanel()
+                    HomeStage.Empty -> EmptyPanel(onConnect = onConnect)
+                    HomeStage.ConnectionFailed -> ConnectionFailedPanel(
+                        host = state.savedHost,
+                        message = state.statusMessage,
+                        onRetry = onRetry,
+                        onForget = onForget
+                    )
+                    HomeStage.Discovering -> DiscoveryPanel(
+                        discoveredPis = state.discoveredPis,
+                        manualHostInput = state.manualHostInput,
+                        manualTokenInput = state.manualTokenInput,
+                        pairing = state.pairing,
+                        statusMessage = state.statusMessage,
+                        onChooseDiscovered = onChooseDiscovered,
+                        onUpdateManualHost = onUpdateManualHost,
+                        onSubmitManualHost = onSubmitManualHost,
+                        onUpdateManualToken = onUpdateManualToken,
+                        onSubmitManualToken = onSubmitManualToken,
+                        onCancel = onCancelConnect
+                    )
+                    HomeStage.Connected -> ConnectedPanel(
+                        connectionLabel = state.connectionLabel,
+                        dashboard = state.dashboard,
+                        isBusy = state.isBusy,
+                        statusMessage = state.statusMessage,
+                        onSetZoneOn = onSetZoneOn,
+                        onSetAllZonesOn = onSetAllZonesOn,
+                        onReconnectSpeaker = onReconnectSpeaker,
+                        onOpenSpotify = { openSpotify(context) }
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
+            }
         }
     }
 }
 
 @Composable
 private fun ConnectingPanel() {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    SoftCard {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(20.dp),
+                .padding(24.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp)
+            horizontalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(20.dp))
-            Text("Connecting to your Pi...", style = MaterialTheme.typography.titleMedium)
+            CircularProgressIndicator(
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(22.dp),
+                color = MaterialTheme.colorScheme.primary
+            )
+            Column {
+                Text("Connecting", style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "Talking to your Pi...",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun EmptyPanel(onConnect: () -> Unit) {
-    Card(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        verticalArrangement = Arrangement.spacedBy(20.dp)
     ) {
-        Column(
-            modifier = Modifier.padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
-        ) {
-            Text("No speakers yet", style = MaterialTheme.typography.headlineSmall)
-            Text(
-                "Pair a Raspberry Pi running PiHouse Audio to start streaming. " +
-                    "The Pi handles the Bluetooth pairing — this app is the remote.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Button(onClick = onConnect, modifier = Modifier.fillMaxWidth()) {
-                Text("Connect a speaker")
+        SoftCard {
+            Column(
+                modifier = Modifier.padding(28.dp),
+                verticalArrangement = Arrangement.spacedBy(14.dp)
+            ) {
+                BurgundyMonogram()
+                Text(
+                    "Add your first speaker",
+                    style = MaterialTheme.typography.headlineSmall
+                )
+                Text(
+                    "Pair a Raspberry Pi running PiHouse Audio and we'll show your speakers here. The Pi handles the Bluetooth — this is the remote.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.height(4.dp))
+                PrimaryActionButton(
+                    text = "Connect a speaker",
+                    onClick = onConnect
+                )
             }
+        }
+    }
+}
+
+@Composable
+private fun BurgundyMonogram() {
+    Surface(
+        modifier = Modifier
+            .size(52.dp)
+            .clip(RoundedCornerShape(16.dp)),
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+    ) {
+        Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
+            Text(
+                "Pi",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.Bold
+            )
         }
     }
 }
@@ -241,25 +315,35 @@ private fun ConnectionFailedPanel(
     onRetry: () -> Unit,
     onForget: () -> Unit
 ) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer,
-            contentColor = MaterialTheme.colorScheme.onErrorContainer
-        ),
-        modifier = Modifier.fillMaxWidth()
-    ) {
+    SoftCard {
         Column(
-            modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text("Can't reach your Pi", style = MaterialTheme.typography.titleMedium)
+            StatusChip(
+                text = "Offline",
+                backgroundColor = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer
+            )
+            Text(
+                "Can't reach your Pi",
+                style = MaterialTheme.typography.headlineSmall
+            )
             Text(
                 message ?: "The saved Pi at ${host ?: "(unknown)"} did not respond.",
-                style = MaterialTheme.typography.bodyMedium
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Spacer(Modifier.height(2.dp))
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                Button(onClick = onRetry) { Text("Try again") }
-                OutlinedButton(onClick = onForget) { Text("Forget Pi") }
+                PrimaryActionButton(text = "Try again", onClick = onRetry)
+                OutlinedButton(
+                    onClick = onForget,
+                    shape = RoundedCornerShape(14.dp),
+                    contentPadding = PaddingValues(horizontal = 22.dp, vertical = 12.dp)
+                ) {
+                    Text("Forget Pi")
+                }
             }
         }
     }
@@ -279,12 +363,12 @@ private fun DiscoveryPanel(
     onSubmitManualToken: () -> Unit,
     onCancel: () -> Unit
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    SoftCard {
         Column(
-            modifier = Modifier.padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp)
+            modifier = Modifier.padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            Text("Find your Pi", style = MaterialTheme.typography.titleLarge)
+            Text("Find your Pi", style = MaterialTheme.typography.headlineSmall)
             if (pairing == null) {
                 Text(
                     "Looking for PiHouse Audio on the local network. Make sure the Pi is powered on and on the same Wi-Fi.",
@@ -299,20 +383,24 @@ private fun DiscoveryPanel(
                     ) {
                         CircularProgressIndicator(
                             strokeWidth = 2.dp,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(18.dp),
+                            color = MaterialTheme.colorScheme.primary
                         )
-                        Text("Searching...")
+                        Text("Searching...", color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 } else {
-                    discoveredPis.forEach { pi ->
-                        DiscoveredPiRow(pi = pi, onClick = { onChooseDiscovered(pi) })
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        discoveredPis.forEach { pi ->
+                            DiscoveredPiRow(pi = pi, onClick = { onChooseDiscovered(pi) })
+                        }
                     }
                 }
 
                 Spacer(Modifier.height(4.dp))
                 Text(
                     "Don't see your Pi?",
-                    style = MaterialTheme.typography.titleSmall
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 OutlinedTextField(
                     value = manualHostInput,
@@ -320,12 +408,15 @@ private fun DiscoveryPanel(
                     label = { Text("Pi IP address or hostname") },
                     placeholder = { Text("e.g. 192.168.1.42") },
                     singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
                     modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedButton(
                     onClick = onSubmitManualHost,
                     enabled = manualHostInput.isNotBlank(),
-                    modifier = Modifier.fillMaxWidth()
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(vertical = 14.dp)
                 ) {
                     Text("Add by address")
                 }
@@ -358,16 +449,21 @@ private fun DiscoveredPiRow(pi: DiscoveredPi, onClick: () -> Unit) {
     Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(MaterialTheme.shapes.medium),
+            .clip(RoundedCornerShape(16.dp)),
         color = MaterialTheme.colorScheme.surfaceVariant,
+        contentColor = MaterialTheme.colorScheme.onSurface,
         onClick = onClick
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp)
+            modifier = Modifier.padding(horizontal = 18.dp, vertical = 14.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Text(pi.label, style = MaterialTheme.typography.titleMedium)
-            Text(pi.authority, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(
+                pi.authority,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             if (!pi.pairingOpen) {
                 Text(
                     "Pairing closed — you may need to open the pairing window on the Pi.",
@@ -394,8 +490,15 @@ private fun PairingContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                CircularProgressIndicator(strokeWidth = 2.dp, modifier = Modifier.size(18.dp))
-                Text("Asking the Pi for a pairing token...")
+                CircularProgressIndicator(
+                    strokeWidth = 2.dp,
+                    modifier = Modifier.size(18.dp),
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Text(
+                    "Asking the Pi for a pairing token...",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         } else if (pairing.requiresManualToken) {
             pairing.note?.let {
@@ -410,15 +513,15 @@ private fun PairingContent(
                 onValueChange = onUpdateManualToken,
                 label = { Text("Pairing code") },
                 singleLine = true,
+                shape = RoundedCornerShape(14.dp),
                 modifier = Modifier.fillMaxWidth()
             )
-            Button(
+            PrimaryActionButton(
+                text = "Pair",
                 onClick = onSubmitManualToken,
                 enabled = manualTokenInput.isNotBlank(),
                 modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Pair")
-            }
+            )
         } else {
             pairing.note?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
         }
@@ -426,7 +529,8 @@ private fun PairingContent(
 }
 
 @Composable
-private fun ConnectedPanel(
+private fun ColumnScope.ConnectedPanel(
+    connectionLabel: ConnectionLabel,
     dashboard: DashboardModel?,
     isBusy: Boolean,
     statusMessage: String?,
@@ -440,11 +544,13 @@ private fun ConnectedPanel(
         return
     }
 
-    if (dashboard.isDemoMode) {
-        DemoModeBanner()
-    }
+    ConnectionLabelChip(label = connectionLabel)
 
-    if (dashboard.healthReasons.isNotEmpty()) {
+    AnimatedVisibility(
+        visible = dashboard.healthReasons.isNotEmpty(),
+        enter = fadeIn() + scaleIn(initialScale = 0.96f),
+        exit = fadeOut() + scaleOut(targetScale = 0.96f)
+    ) {
         HealthIssuesBanner(reasonCodes = dashboard.healthReasons)
     }
 
@@ -455,7 +561,7 @@ private fun ConnectedPanel(
         onReconnectSpeaker = onReconnectSpeaker
     )
 
-    WholeHouseRow(
+    WholeHouseCard(
         dashboard = dashboard,
         isBusy = isBusy,
         onSetAllZonesOn = onSetAllZonesOn,
@@ -468,6 +574,31 @@ private fun ConnectedPanel(
 }
 
 @Composable
+private fun ConnectionLabelChip(label: ConnectionLabel) {
+    when (label) {
+        ConnectionLabel.None, ConnectionLabel.Failed -> Unit
+        is ConnectionLabel.Connected -> StatusChip(
+            text = "Connected to ${label.host}",
+            backgroundColor = MaterialTheme.colorScheme.primaryContainer,
+            contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+            dotColor = MaterialTheme.colorScheme.primary
+        )
+        is ConnectionLabel.Demo -> StatusChip(
+            text = "Demo mode — ${label.host} is running the stub adapter",
+            backgroundColor = MaterialTheme.colorScheme.tertiaryContainer,
+            contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+            dotColor = MaterialTheme.colorScheme.tertiary
+        )
+        is ConnectionLabel.Degraded -> StatusChip(
+            text = "${label.host} — degraded",
+            backgroundColor = MaterialTheme.colorScheme.errorContainer,
+            contentColor = MaterialTheme.colorScheme.onErrorContainer,
+            dotColor = MaterialTheme.colorScheme.error
+        )
+    }
+}
+
+@Composable
 private fun SpeakersList(
     dashboard: DashboardModel,
     isBusy: Boolean,
@@ -477,32 +608,34 @@ private fun SpeakersList(
     val canSetSystems = dashboard.canRunOperation("set_speaker_systems")
     val canReconnect = dashboard.canRunOperation("reconnect")
 
-    dashboard.speakerSystems.forEach { system ->
-        val speaker = dashboard.speakers.firstOrNull { matchesSystem(it.id, system.id) }
-        SpeakerCard(
-            system = system,
-            speaker = speaker,
-            isDemoMode = dashboard.isDemoMode,
-            isBusy = isBusy,
-            canToggle = canSetSystems,
-            canReconnect = canReconnect,
-            onSetOn = { on -> onSetZoneOn(system.id, on) },
-            onReconnect = speaker?.let { { onReconnectSpeaker(it.id) } }
-        )
-    }
+    Column(verticalArrangement = Arrangement.spacedBy(14.dp)) {
+        dashboard.speakerSystems.forEach { system ->
+            val speaker = dashboard.speakers.firstOrNull { matchesSystem(it.id, system.id) }
+            SpeakerCard(
+                system = system,
+                speaker = speaker,
+                isDemoMode = dashboard.isDemoMode,
+                isBusy = isBusy,
+                canToggle = canSetSystems,
+                canReconnect = canReconnect,
+                onSetOn = { on -> onSetZoneOn(system.id, on) },
+                onReconnect = speaker?.let { { onReconnectSpeaker(it.id) } }
+            )
+        }
 
-    if (dashboard.speakerSystems.isEmpty()) {
-        Card(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(20.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text("No speakers reported", style = MaterialTheme.typography.titleMedium)
-                Text(
-                    "The Pi did not return any speaker systems in this snapshot.",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+        if (dashboard.speakerSystems.isEmpty()) {
+            SoftCard {
+                Column(
+                    modifier = Modifier.padding(24.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text("No speakers reported", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "The Pi did not return any speaker systems in this snapshot.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
     }
@@ -522,51 +655,101 @@ private fun SpeakerCard(
     val readiness = system.systemReadiness()
     val speakerLive = speaker?.liveState() ?: SpeakerLiveState.UNKNOWN
     val statusLabel = system.plainEnglishStatus()
-    val suffix = if (isDemoMode) " (demo)" else ""
+    val isPlaying = !isDemoMode && readiness == SystemReadiness.READY && system.active
 
-    Card(modifier = Modifier.fillMaxWidth()) {
+    val cardContainer by animateColorAsState(
+        targetValue = if (isPlaying) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface,
+        animationSpec = tween(durationMillis = 320),
+        label = "speaker-card-bg"
+    )
+    val cardContent by animateColorAsState(
+        targetValue = if (isPlaying) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
+        animationSpec = tween(durationMillis = 320),
+        label = "speaker-card-fg"
+    )
+    val elevation by animateDpAsState(
+        targetValue = if (isPlaying) 4.dp else 1.dp,
+        animationSpec = tween(durationMillis = 280),
+        label = "speaker-card-elevation"
+    )
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = cardContainer,
+            contentColor = cardContent
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = elevation)
+    ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 StatusDot(readiness = readiness, isDemoMode = isDemoMode)
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(system.label, style = MaterialTheme.typography.titleMedium)
                     Text(
-                        "$statusLabel$suffix",
+                        system.label,
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        statusLabel,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = readinessColor(readiness, isDemoMode)
+                        color = if (isPlaying) cardContent.copy(alpha = 0.85f) else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 Switch(
                     checked = system.enabled,
                     enabled = !isBusy && canToggle,
-                    onCheckedChange = onSetOn
+                    onCheckedChange = onSetOn,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = MaterialTheme.colorScheme.primary,
+                        uncheckedThumbColor = Color.White,
+                        uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
                 )
+            }
+
+            AnimatedVisibility(
+                visible = isPlaying || isDemoMode,
+                enter = fadeIn() + scaleIn(initialScale = 0.92f),
+                exit = fadeOut() + scaleOut(targetScale = 0.92f)
+            ) {
+                Row {
+                    if (isPlaying) {
+                        PlayingPill()
+                    } else if (isDemoMode) {
+                        DemoChip()
+                    }
+                }
             }
 
             speaker?.let { row ->
                 val tag = when (speakerLive) {
-                    SpeakerLiveState.CONNECTED -> if (isDemoMode) "Bluetooth: simulated link" else "Bluetooth: linked"
+                    SpeakerLiveState.CONNECTED -> if (isDemoMode) "Bluetooth: simulated link" else "Bluetooth linked"
                     SpeakerLiveState.DISCONNECTED -> "Bluetooth: not linked"
-                    SpeakerLiveState.UNASSIGNED -> "Bluetooth: no speaker assigned"
+                    SpeakerLiveState.UNASSIGNED -> "No speaker assigned"
                     SpeakerLiveState.UNKNOWN -> "Bluetooth: status unknown"
                 }
                 Text(
                     tag,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                    color = if (isPlaying) cardContent.copy(alpha = 0.75f) else MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                ReasonList(row.reasonCodes)
+                ReasonList(row.reasonCodes, onMutedSurface = !isPlaying)
                 if (onReconnect != null && speakerLive != SpeakerLiveState.UNASSIGNED) {
                     OutlinedButton(
                         onClick = onReconnect,
                         enabled = !isBusy && canReconnect,
-                        modifier = Modifier.fillMaxWidth()
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(vertical = 12.dp)
                     ) {
                         Text("Reconnect on the Pi")
                     }
@@ -581,13 +764,56 @@ private fun SpeakerCard(
                 )
             }
 
-            ReasonList(system.reasonCodes)
+            ReasonList(system.reasonCodes, onMutedSurface = !isPlaying)
         }
     }
 }
 
 @Composable
-private fun WholeHouseRow(
+private fun PlayingPill() {
+    Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = MaterialTheme.colorScheme.primary,
+        contentColor = MaterialTheme.colorScheme.onPrimary
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(7.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.onPrimary)
+            )
+            Text(
+                "Playing",
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
+
+@Composable
+private fun DemoChip() {
+    Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = MaterialTheme.colorScheme.tertiaryContainer,
+        contentColor = MaterialTheme.colorScheme.onTertiaryContainer
+    ) {
+        Text(
+            "Demo",
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = FontWeight.SemiBold
+        )
+    }
+}
+
+@Composable
+private fun WholeHouseCard(
     dashboard: DashboardModel,
     isBusy: Boolean,
     onSetAllZonesOn: (Boolean) -> Unit,
@@ -596,40 +822,48 @@ private fun WholeHouseRow(
     val canSetSystems = dashboard.canRunOperation("set_speaker_systems")
     val allOn = dashboard.speakerSystems.isNotEmpty() &&
         dashboard.speakerSystems.all { it.enabled }
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.secondaryContainer,
-            contentColor = MaterialTheme.colorScheme.onSecondaryContainer
-        )
-    ) {
+    SoftCard {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                horizontalArrangement = Arrangement.spacedBy(14.dp)
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Whole house", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Whole house",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold
+                    )
                     Text(
                         if (allOn) "All zones on" else "Pick which zones to play",
-                        style = MaterialTheme.typography.bodyMedium
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
                 Switch(
                     checked = allOn,
                     enabled = !isBusy && canSetSystems && dashboard.speakerSystems.isNotEmpty(),
-                    onCheckedChange = onSetAllZonesOn
+                    onCheckedChange = onSetAllZonesOn,
+                    colors = SwitchDefaults.colors(
+                        checkedThumbColor = Color.White,
+                        checkedTrackColor = MaterialTheme.colorScheme.primary,
+                        uncheckedThumbColor = Color.White,
+                        uncheckedTrackColor = MaterialTheme.colorScheme.surfaceVariant
+                    )
                 )
             }
-            Button(onClick = onOpenSpotify, modifier = Modifier.fillMaxWidth()) {
-                Text("Play on Spotify")
-            }
+            PrimaryActionButton(
+                text = "Play on Spotify",
+                onClick = onOpenSpotify,
+                modifier = Modifier.fillMaxWidth()
+            )
             Text(
                 "Spotify Connect targets the enabled zones above. The Pi owns the Bluetooth link.",
-                style = MaterialTheme.typography.bodySmall
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -652,16 +886,23 @@ private fun UnavailableControlsHint(dashboard: DashboardModel) {
         }
     }
     if (reasons.isEmpty()) return
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        modifier = Modifier.fillMaxWidth()
-    ) {
+    SoftCard {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            Text("Why some controls are off", style = MaterialTheme.typography.titleSmall)
-            reasons.forEach { reason -> Text("• $reason", style = MaterialTheme.typography.bodySmall) }
+            Text(
+                "Why some controls are off",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            reasons.forEach { reason ->
+                Text(
+                    "• $reason",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
         }
     }
 }
@@ -669,12 +910,12 @@ private fun UnavailableControlsHint(dashboard: DashboardModel) {
 @Composable
 private fun StatusDot(readiness: SystemReadiness, isDemoMode: Boolean) {
     val color = readinessColor(readiness, isDemoMode)
-    Surface(
+    Box(
         modifier = Modifier
-            .size(12.dp)
-            .clip(CircleShape),
-        color = color
-    ) { Spacer(Modifier.size(12.dp)) }
+            .size(10.dp)
+            .clip(CircleShape)
+            .background(color)
+    )
 }
 
 private fun matchesSystem(speakerId: String, systemId: String): Boolean {
@@ -697,39 +938,14 @@ private fun readinessColor(readiness: SystemReadiness, isDemoMode: Boolean): Col
 }
 
 @Composable
-private fun DemoModeBanner() {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.tertiaryContainer,
-            contentColor = MaterialTheme.colorScheme.onTertiaryContainer
-        ),
-        modifier = Modifier.fillMaxWidth()
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            Text("Demo mode", style = MaterialTheme.typography.titleMedium)
-            Text(
-                "The Pi is reporting stub data. No real hardware is connected, so any 'on' state below is simulated.",
-                style = MaterialTheme.typography.bodyMedium
-            )
-        }
-    }
-}
-
-@Composable
 private fun HealthIssuesBanner(reasonCodes: List<String>) {
-    Card(
-        colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.errorContainer,
-            contentColor = MaterialTheme.colorScheme.onErrorContainer
-        ),
-        modifier = Modifier.fillMaxWidth()
+    SoftCard(
+        containerColor = MaterialTheme.colorScheme.errorContainer,
+        contentColor = MaterialTheme.colorScheme.onErrorContainer
     ) {
         Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp)
+            modifier = Modifier.padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Text(
                 "Pi reports ${reasonCodes.size} issue(s)",
@@ -743,32 +959,110 @@ private fun HealthIssuesBanner(reasonCodes: List<String>) {
 }
 
 @Composable
-private fun ReasonList(reasonCodes: List<String>) {
+private fun ReasonList(reasonCodes: List<String>, onMutedSurface: Boolean) {
     if (reasonCodes.isEmpty()) return
+    val color = if (onMutedSurface) {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    } else {
+        MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.85f)
+    }
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         ReasonCodes.toPlainEnglishList(reasonCodes).forEach { sentence ->
-            Text(
-                "• $sentence",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+            Text("• $sentence", style = MaterialTheme.typography.bodySmall, color = color)
         }
     }
 }
 
 @Composable
 private fun MessageCard(text: String) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
-        modifier = Modifier.fillMaxWidth()
-    ) {
+    SoftCard(containerColor = MaterialTheme.colorScheme.surfaceVariant) {
         Column(
-            modifier = Modifier.padding(16.dp),
+            modifier = Modifier.padding(20.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
-            Text("Last update", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "Last update",
+                style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             Text(text, style = MaterialTheme.typography.bodyMedium)
         }
+    }
+}
+
+@Composable
+private fun SoftCard(
+    containerColor: Color = MaterialTheme.colorScheme.surface,
+    contentColor: Color = MaterialTheme.colorScheme.onSurface,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(22.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = containerColor,
+            contentColor = contentColor
+        ),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
+    ) {
+        Column(content = content)
+    }
+}
+
+@Composable
+private fun StatusChip(
+    text: String,
+    backgroundColor: Color,
+    contentColor: Color,
+    dotColor: Color? = null
+) {
+    Surface(
+        shape = RoundedCornerShape(999.dp),
+        color = backgroundColor,
+        contentColor = contentColor,
+        modifier = Modifier.widthIn(min = 80.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            if (dotColor != null) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .clip(CircleShape)
+                        .background(dotColor)
+                )
+            }
+            Text(
+                text,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+    }
+}
+
+@Composable
+private fun PrimaryActionButton(
+    text: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    modifier: Modifier = Modifier
+) {
+    Button(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = modifier,
+        shape = RoundedCornerShape(16.dp),
+        colors = ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.primary,
+            contentColor = MaterialTheme.colorScheme.onPrimary
+        ),
+        contentPadding = PaddingValues(horizontal = 24.dp, vertical = 14.dp)
+    ) {
+        Text(text, style = MaterialTheme.typography.labelLarge)
     }
 }
 
@@ -790,6 +1084,7 @@ private fun openSpotify(context: Context) {
 private fun PreviewConnectedHealthy() {
     PreviewWrapper {
         ConnectedPanel(
+            connectionLabel = ConnectionLabel.Connected("kitchen-pi.local"),
             dashboard = sampleDashboard(),
             isBusy = false,
             statusMessage = null,
@@ -806,6 +1101,7 @@ private fun PreviewConnectedHealthy() {
 private fun PreviewConnectedDemo() {
     PreviewWrapper {
         ConnectedPanel(
+            connectionLabel = ConnectionLabel.Demo("kitchen-pi.local"),
             dashboard = sampleDashboard().copy(audioOutputAdapterMode = "stub"),
             isBusy = false,
             statusMessage = null,
@@ -822,6 +1118,7 @@ private fun PreviewConnectedDemo() {
 private fun PreviewConnectedDegraded() {
     PreviewWrapper {
         ConnectedPanel(
+            connectionLabel = ConnectionLabel.Degraded("kitchen-pi.local"),
             dashboard = sampleDashboard().copy(
                 healthReasons = listOf("outdoor_speaker_disconnected", "watchdog_inactive"),
                 speakers = listOf(
@@ -949,13 +1246,15 @@ private fun PreviewPairingFallback() {
 
 @Composable
 private fun PreviewWrapper(content: @Composable ColumnScope.() -> Unit) {
-    MaterialTheme {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
-        ) { content() }
+    PiStreamTheme {
+        Surface(color = MaterialTheme.colorScheme.background) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(18.dp)
+            ) { content() }
+        }
     }
 }
 

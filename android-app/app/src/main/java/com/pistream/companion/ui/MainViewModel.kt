@@ -54,7 +54,14 @@ class MainViewModel(
     }
 
     private suspend fun attemptConnect(host: String, token: String) {
-        _state.update { it.copy(stage = HomeStage.Connecting, savedHost = host, statusMessage = null) }
+        _state.update {
+            it.copy(
+                stage = HomeStage.Connecting,
+                connectionLabel = ConnectionLabel.None,
+                savedHost = host,
+                statusMessage = null
+            )
+        }
         val result = repository.connect(host, token)
         applyConnectionResult(host, result)
     }
@@ -64,33 +71,46 @@ class MainViewModel(
             when (result) {
                 is ConnectionResult.FoundHealthy -> current.copy(
                     stage = HomeStage.Connected,
+                    connectionLabel = ConnectionLabel.Connected(host),
+                    savedHost = host,
+                    dashboard = result.dashboard,
+                    statusMessage = null
+                )
+                is ConnectionResult.FoundDemo -> current.copy(
+                    stage = HomeStage.Connected,
+                    connectionLabel = ConnectionLabel.Demo(host),
                     savedHost = host,
                     dashboard = result.dashboard,
                     statusMessage = null
                 )
                 is ConnectionResult.FoundUnhealthy -> current.copy(
                     stage = HomeStage.Connected,
+                    connectionLabel = ConnectionLabel.Degraded(host),
                     savedHost = host,
                     dashboard = result.dashboard,
                     statusMessage = "Pi is reachable but reports degraded health."
                 )
                 is ConnectionResult.WrongDevice -> current.copy(
                     stage = HomeStage.ConnectionFailed,
+                    connectionLabel = ConnectionLabel.Failed,
                     savedHost = host,
                     statusMessage = "Host $host now reports a different Pi identity. Forget this Pi to pair the new one."
                 )
                 is ConnectionResult.Unauthorized -> current.copy(
                     stage = HomeStage.ConnectionFailed,
+                    connectionLabel = ConnectionLabel.Failed,
                     savedHost = host,
                     statusMessage = "Pi rejected the saved pairing token. Forget this Pi and pair again."
                 )
                 is ConnectionResult.ApiUnavailable -> current.copy(
                     stage = HomeStage.ConnectionFailed,
+                    connectionLabel = ConnectionLabel.Failed,
                     savedHost = host,
                     statusMessage = "Could not reach $host: ${result.cause}"
                 )
                 ConnectionResult.NotFound -> current.copy(
                     stage = HomeStage.ConnectionFailed,
+                    connectionLabel = ConnectionLabel.Failed,
                     savedHost = host,
                     statusMessage = "Could not reach $host on this network. Make sure the Pi is online and on the same Wi-Fi."
                 )
@@ -295,6 +315,14 @@ class MainViewModel(
 
 enum class HomeStage { Connecting, Connected, Empty, Discovering, ConnectionFailed }
 
+sealed interface ConnectionLabel {
+    data object None : ConnectionLabel
+    data class Connected(val host: String) : ConnectionLabel
+    data class Demo(val host: String) : ConnectionLabel
+    data class Degraded(val host: String) : ConnectionLabel
+    data object Failed : ConnectionLabel
+}
+
 data class HomeUiState(
     val stage: HomeStage = HomeStage.Connecting,
     val savedHost: String? = null,
@@ -304,7 +332,8 @@ data class HomeUiState(
     val discoveredPis: List<DiscoveredPi> = emptyList(),
     val manualHostInput: String = "",
     val manualTokenInput: String = "",
-    val pairing: PairingUiState? = null
+    val pairing: PairingUiState? = null,
+    val connectionLabel: ConnectionLabel = ConnectionLabel.None
 )
 
 data class PairingUiState(
