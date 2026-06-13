@@ -148,6 +148,7 @@ fun PiCompanionScreen(viewModel: MainViewModel) {
             onSubmitManualHost = viewModel::submitManualHost,
             onUpdateManualToken = viewModel::updateManualTokenInput,
             onSubmitManualToken = viewModel::submitManualToken,
+            onRetryPairing = viewModel::retryPairing,
             onRetry = viewModel::retrySavedConnection,
             onForget = viewModel::forgetPi,
             onSetZoneOn = viewModel::setZoneOn,
@@ -169,6 +170,7 @@ private fun HomeBody(
     onSubmitManualHost: () -> Unit,
     onUpdateManualToken: (String) -> Unit,
     onSubmitManualToken: () -> Unit,
+    onRetryPairing: () -> Unit,
     onRetry: () -> Unit,
     onForget: () -> Unit,
     onSetZoneOn: (String, Boolean) -> Unit,
@@ -212,6 +214,7 @@ private fun HomeBody(
                         onSubmitManualHost = onSubmitManualHost,
                         onUpdateManualToken = onUpdateManualToken,
                         onSubmitManualToken = onSubmitManualToken,
+                        onRetryPairing = onRetryPairing,
                         onCancel = onCancelConnect
                     )
                     HomeStage.Connected -> ConnectedPanel(
@@ -361,6 +364,7 @@ private fun DiscoveryPanel(
     onSubmitManualHost: () -> Unit,
     onUpdateManualToken: (String) -> Unit,
     onSubmitManualToken: () -> Unit,
+    onRetryPairing: () -> Unit,
     onCancel: () -> Unit
 ) {
     SoftCard {
@@ -425,7 +429,8 @@ private fun DiscoveryPanel(
                     pairing = pairing,
                     manualTokenInput = manualTokenInput,
                     onUpdateManualToken = onUpdateManualToken,
-                    onSubmitManualToken = onSubmitManualToken
+                    onSubmitManualToken = onSubmitManualToken,
+                    onRetryPairing = onRetryPairing
                 )
             }
 
@@ -480,7 +485,8 @@ private fun PairingContent(
     pairing: PairingUiState,
     manualTokenInput: String,
     onUpdateManualToken: (String) -> Unit,
-    onSubmitManualToken: () -> Unit
+    onSubmitManualToken: () -> Unit,
+    onRetryPairing: () -> Unit
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Pairing with ${pairing.host}", style = MaterialTheme.typography.titleMedium)
@@ -520,6 +526,19 @@ private fun PairingContent(
                 text = "Pair",
                 onClick = onSubmitManualToken,
                 enabled = manualTokenInput.isNotBlank(),
+                modifier = Modifier.fillMaxWidth()
+            )
+        } else if (pairing.canRetry) {
+            pairing.note?.let {
+                Text(
+                    it,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            PrimaryActionButton(
+                text = "Try again",
+                onClick = onRetryPairing,
                 modifier = Modifier.fillMaxWidth()
             )
         } else {
@@ -1185,6 +1204,7 @@ private fun PreviewDiscoverySearching() {
             onSubmitManualHost = {},
             onUpdateManualToken = {},
             onSubmitManualToken = {},
+            onRetryPairing = {},
             onCancel = {}
         )
     }
@@ -1214,6 +1234,7 @@ private fun PreviewDiscoveryFound() {
             onSubmitManualHost = {},
             onUpdateManualToken = {},
             onSubmitManualToken = {},
+            onRetryPairing = {},
             onCancel = {}
         )
     }
@@ -1239,6 +1260,7 @@ private fun PreviewPairingFallback() {
             onSubmitManualHost = {},
             onUpdateManualToken = {},
             onSubmitManualToken = {},
+            onRetryPairing = {},
             onCancel = {}
         )
     }

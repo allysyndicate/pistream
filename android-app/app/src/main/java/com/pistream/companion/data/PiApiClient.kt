@@ -70,8 +70,16 @@ class PiApiClient {
             contentType(ContentType.Application.Json)
             setBody(body)
         }
-        if (!response.status.isSuccess()) return response.status.toApiError()
-        return ApiCallResult.Success(response.body())
+        if (response.status.isSuccess()) return ApiCallResult.Success(response.body())
+        // Pairing errors carry actionable detail (e.g. the 403 `pairing_closed` operator hint).
+        // Prefer the body-supplied code/message over the canned status-code label.
+        val envelope = runCatching { response.body<ApiEnvelope<PairingResponseDto>>() }.getOrNull()
+        val error = envelope?.error
+        return if (error != null) {
+            ApiCallResult.Failure(error.code, error.message)
+        } else {
+            response.status.toApiError()
+        }
     }
 
     suspend fun reconnect(baseUrl: String, token: String, body: OperationRequestDto): ApiCallResult<OperationDto> {

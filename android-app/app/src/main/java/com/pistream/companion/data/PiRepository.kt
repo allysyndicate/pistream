@@ -43,8 +43,14 @@ class PiRepository(
             )) {
                 is ApiCallResult.Success -> PairingAttempt.Issued(result.value.token)
                 is ApiCallResult.Failure -> when (result.code) {
+                    // 404 = pairing route absent on an older Pi → fall back to manual paste.
                     "not_found" -> PairingAttempt.NotSupported
-                    "forbidden" -> PairingAttempt.WindowClosed
+                    // 403 `pairing_closed` is a distinct outcome — NOT a manual-token fallback.
+                    // The server message carries the operator hint (e.g. `pihouse-pair --open 5m`).
+                    "pairing_closed" -> PairingAttempt.WindowClosed(result.message)
+                    // 503 `token_unavailable` is transient — user should retry, not paste.
+                    "token_unavailable", "api_unavailable" ->
+                        PairingAttempt.Transient(result.message)
                     else -> PairingAttempt.Failed("${result.code}: ${result.message}")
                 }
             }
@@ -257,7 +263,8 @@ data class BluetoothScanResult(
 sealed interface PairingAttempt {
     data class Issued(val token: String) : PairingAttempt
     data object NotSupported : PairingAttempt
-    data object WindowClosed : PairingAttempt
+    data class WindowClosed(val detail: String) : PairingAttempt
+    data class Transient(val detail: String) : PairingAttempt
     data class Failed(val message: String) : PairingAttempt
 }
 

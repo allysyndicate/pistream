@@ -219,13 +219,23 @@ class MainViewModel(
                         )
                     )
                 }
-                PairingAttempt.WindowClosed -> _state.update {
+                is PairingAttempt.WindowClosed -> _state.update {
                     it.copy(
                         pairing = PairingUiState(
                             host = host,
                             busy = false,
-                            requiresManualToken = true,
-                            note = "Pairing is closed on this Pi. Run 'pihouse pair --open' on the Pi or paste a pairing code below."
+                            canRetry = true,
+                            note = "Pairing is closed on the Pi — open a window on the device, then retry.\n\n${attempt.detail}"
+                        )
+                    )
+                }
+                is PairingAttempt.Transient -> _state.update {
+                    it.copy(
+                        pairing = PairingUiState(
+                            host = host,
+                            busy = false,
+                            canRetry = true,
+                            note = "The Pi could not issue a token right now. ${attempt.detail} Try again in a moment."
                         )
                     )
                 }
@@ -241,6 +251,11 @@ class MainViewModel(
                 }
             }
         }
+    }
+
+    fun retryPairing() {
+        val host = state.value.pairing?.host ?: return
+        beginPairing(host)
     }
 
     fun submitManualToken() {
@@ -340,6 +355,7 @@ data class PairingUiState(
     val host: String,
     val busy: Boolean,
     val requiresManualToken: Boolean = false,
+    val canRetry: Boolean = false,
     val note: String? = null
 )
 
