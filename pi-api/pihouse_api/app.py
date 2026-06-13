@@ -7,8 +7,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from .adapters import RealHardwareAdapter, StubHardwareAdapter
-from .auth import maybe_health_auth, require_bearer
+from .auth import load_token, maybe_health_auth, require_bearer
 from .config import ROOT, load_config
+from .discovery import MdnsAdvertiser
 from .operations import (
     AssignSpeakerRequest,
     OperationRequest,
@@ -21,6 +22,7 @@ from .operations import (
     create_operation,
     validate_freshness,
 )
+from .pairing import PairingRequest, PairingStore, validate_client_instance_id
 from .status import health_payload, identity_payload, observed_at, status_payload
 
 
@@ -44,6 +46,24 @@ def create_app() -> FastAPI:
     else:
         app.state.adapter = StubHardwareAdapter()
     app.state.operations = OperationStore(ROOT / ".state" / "operations.json")
+    app.state.pairing = PairingStore(
+        ROOT / ".state" / "pairing.json",
+        stub_always_open=app.state.config.adapterMode == "stub",
+    )
+    app.state.mdns = MdnsAdvertiser(
+        device_id=app.state.config.deviceId,
+        api_name=app.state.config.apiName,
+        contract_version=app.state.config.contractVersion,
+        pairing_open_provider=app.state.pairing.is_window_open,
+    )
+
+    @app.on_event("startup")
+    async def _start_mdns() -> None:
+        app.state.mdns.start()
+
+    @app.on_event("shutdown")
+    async def _stop_mdns() -> None:
+        app.state.mdns.stop()
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
@@ -68,6 +88,54 @@ def create_app() -> FastAPI:
     @app.get("/api/v1/identity")
     async def identity(request: Request) -> dict:
         return {"ok": True, **identity_payload(request.app.state.config), "observedAt": observed_at()}
+
+    @app.post("/api/v1/pairing/request-token")
+    async def request_pairing_token(payload: PairingRequest, request: Request) -> JSONResponse:
+        try:
+            validate_client_instance_id(payload.clientInstanceId)
+        except (ValueError, AttributeError):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "code": "invalid_request",
+                    "message": "clientInstanceId must be a UUIDv4 string.",
+                    "details": {"field": "clientInstanceId"},
+                },
+            )
+        store: PairingStore = request.app.state.pairing
+        if not store.is_window_open():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "code": "pairing_closed",
+                    "message": (
+                        "Pairing is disabled on this Pi. Run "
+                        "`python -m pihouse_api.pairing --open 5m` on the Pi to enable."
+                    ),
+                    "details": {"adapterMode": request.app.state.config.adapterMode},
+                },
+            )
+        store.record_issuance(payload.clientName, payload.clientInstanceId)
+        try:
+            token = load_token(request.app.state.config)
+        except (OSError, RuntimeError) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "code": "token_unavailable",
+                    "message": "The bearer token file is not readable on this Pi.",
+                    "details": {"reason": exc.__class__.__name__},
+                },
+            )
+        return JSONResponse(
+            status_code=status.HTTP_200_OK,
+            content={
+                "ok": True,
+                "token": token,
+                "expiresAt": None,
+                "observedAt": observed_at(),
+            },
+        )
 
     @app.get("/api/v1/health", dependencies=[Depends(maybe_health_auth)])
     async def health(request: Request) -> dict:

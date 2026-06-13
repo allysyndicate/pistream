@@ -50,6 +50,8 @@ APT_PACKAGES=(
   libspa-0.2-bluetooth
   pulseaudio-utils
   bluez
+  avahi-daemon
+  avahi-utils
   python3-venv
   python3-pip
   curl
@@ -290,6 +292,18 @@ start_user_units() {
   done
 }
 
+# --- 11. Open initial pairing window so the first Android handshake works ----
+open_initial_pairing_window() {
+  local venv="${PI_API_DIR}/.venv"
+  if [[ ! -x "${venv}/bin/python" ]]; then
+    warn "venv missing; skipping pairing window open"
+    return
+  fi
+  log "opening 5m pairing window for first Android handshake"
+  PIHOUSE_CONFIG="${ACTIVE_CONFIG}" "${venv}/bin/python" -m pihouse_api.pairing --open 5m || \
+    warn "could not open pairing window (run: python -m pihouse_api.pairing --open 5m)"
+}
+
 # --- main --------------------------------------------------------------------
 install_apt_packages
 install_librespot
@@ -301,6 +315,7 @@ install_active_config
 install_python_env
 install_api_service
 start_user_units
+open_initial_pairing_window
 
 HOST_NAME="$(hostname 2>/dev/null || true)"
 PRIMARY_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -310,8 +325,18 @@ cat <<EOF
 [setup-pi] Done.
 
 ================================================================================
-Mobile connection info (paste/scan into the Android app):
+Android pairing (no manual host/token entry):
 
+  The API now publishes _pihouse-audio._tcp on port 8765 via avahi so the
+  Android app can discover this Pi automatically. A 5-minute pairing window
+  has been opened, so the first run of the app will receive its bearer token
+  via POST /api/v1/pairing/request-token without any copy-paste.
+
+  To open another pairing window later (e.g. for a second phone or after the
+  window has expired), run on this Pi:
+      ${PI_API_DIR}/.venv/bin/python -m pihouse_api.pairing --open 5m
+
+Manual connection info (fallback only):
   host (mDNS) : ${HOST_NAME:-<set hostname>}.local
   host (IP)   : ${PRIMARY_IP:-<no IPv4 detected>}
   port        : 8765
@@ -334,6 +359,7 @@ Smoke checks:
   curl http://127.0.0.1:8765/api/v1/health
   curl -H "Authorization: Bearer \$(cat ${TOKEN_FILE})" \\
        http://127.0.0.1:8765/api/v1/status | python3 -c "import json,sys; b=json.load(sys.stdin); print('adapterMode=', b.get('adapterMode'))"
+  avahi-browse -t _pihouse-audio._tcp -r
 
 Preflight (re-run any time to find what is missing on this Pi):
   ${PI_API_DIR}/.venv/bin/python -m pihouse_api.bootstrap

@@ -67,8 +67,8 @@ cd ~/pihouse/pi-api
 not own, in the order needed:
 
 - `pipewire`, `pipewire-pulse`, `wireplumber`, `libspa-0.2-bluetooth`,
-  `pulseaudio-utils`, `bluez`, `python3-venv`, `python3-pip`, `curl`,
-  `ca-certificates` via `apt`.
+  `pulseaudio-utils`, `bluez`, `avahi-daemon`, `avahi-utils`, `python3-venv`,
+  `python3-pip`, `curl`, `ca-certificates` via `apt`.
 - `librespot` via the Raspotify installer, then disables the default
   `raspotify.service` so it does not fight the per-endpoint units.
 - `loginctl enable-linger` for the target user so user services keep running
@@ -100,15 +100,58 @@ curl -H "Authorization: Bearer $(cat ~/.config/pihouse-api/token)" \
      http://127.0.0.1:8765/api/v1/status
 ```
 
-Enter the Pi's host/IP and the token from `~/.config/pihouse-api/token` in the
-Android app. Pair the speakers from the app via `pair-speaker` and assign them
-with `assign-speaker`; the real adapter rewrites the librespot env files and
-restarts the affected user services on each assign.
+The Android app discovers the Pi automatically (no host typing, no token
+paste) - see [mDNS And Pairing Token](#mdns-and-pairing-token) below. The
+manual fallback is still to enter the host and the token from
+`~/.config/pihouse-api/token`. Pair the speakers from the app via
+`pair-speaker` and assign them with `assign-speaker`; the real adapter
+rewrites the librespot env files and restarts the affected user services on
+each assign.
 
 If `adapterMode` ever reports `stub` from a real Pi, the active config at
 `~/.config/pihouse-api/config.json` is wrong - either the file is missing
 `"adapterMode": "real"` or `setup-pi.sh` was never run. Fix the config and
 restart `pihouse-api.service`.
+
+### mDNS And Pairing Token
+
+The API process publishes `_pihouse-audio._tcp` on port `8765` through Avahi
+so the Android app can discover this Pi without the user typing a host. The
+TXT record carries:
+
+- `apiName=pihouse-audio-api`
+- `contractVersion=2026-06-phase3`
+- `deviceId=<config.deviceId>` (matches `/api/v1/identity`)
+- `pairing=open` or `pairing=disabled`
+
+The app's flow is: resolve the service via Bonjour/NSD, hit
+`/api/v1/identity` over the resolved IP, and only trust the host if the
+`deviceId` matches. If `pairing=open`, the app then calls
+`POST /api/v1/pairing/request-token` (no bearer required) with
+`{ "clientName": "...", "clientInstanceId": "<UUIDv4>" }` and receives the
+shared bearer token in the response. No copy-paste.
+
+The pairing window is closed by default in real mode. `setup-pi.sh` opens a
+5-minute window at the end of the install so the very first handshake works.
+After that, open another window from the Pi with:
+
+```bash
+~/pihouse/pi-api/.venv/bin/python -m pihouse_api.pairing --open 5m
+```
+
+Other supported invocations: `--open 300s`, `--close`, `--status`. Each
+issuance is recorded in `~/pihouse/pi-api/.state/pairing.json` with
+`clientName`, `clientInstanceId`, and `issuedAt` so the operator can audit
+which devices have paired.
+
+In `adapterMode: stub` (local dev), the pairing window is implicitly always
+open so QA and the test suite never need to flip a CLI.
+
+Verify the mDNS advertisement from another host on the same LAN:
+
+```bash
+avahi-browse -t _pihouse-audio._tcp -r
+```
 
 ### Preflight Diagnostics
 

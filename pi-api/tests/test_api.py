@@ -8,6 +8,8 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 os.environ["PIHOUSE_CONFIG"] = "config.example.json"
+# Tests must not try to spawn the avahi-publish-service supervisor.
+os.environ["PIHOUSE_MDNS_DISABLED"] = "1"
 
 from pihouse_api.auth import TOKEN_ENV_KEY, load_token  # noqa: E402
 

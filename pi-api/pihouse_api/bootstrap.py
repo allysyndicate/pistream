@@ -33,6 +33,8 @@ APT_PACKAGES: tuple[str, ...] = (
     "libspa-0.2-bluetooth",
     "pulseaudio-utils",
     "bluez",
+    "avahi-daemon",
+    "avahi-utils",
 )
 
 
@@ -94,6 +96,17 @@ def check_librespot() -> CheckResult:
         "librespot",
         "missing",
         "not on PATH (install Raspotify or copy librespot to /usr/bin/)",
+    )
+
+
+def check_avahi_publish() -> CheckResult:
+    path = shutil.which("avahi-publish-service")
+    if path:
+        return CheckResult("avahi-publish", "ok", path)
+    return CheckResult(
+        "avahi-publish",
+        "missing",
+        "avahi-publish-service not on PATH (apt-get install avahi-utils)",
     )
 
 
@@ -254,6 +267,7 @@ def collect_checks() -> list[CheckResult]:
     results: list[CheckResult] = []
     results.extend(check_apt_packages())
     results.append(check_librespot())
+    results.append(check_avahi_publish())
 
     user = os.environ.get("USER") or os.environ.get("LOGNAME") or _home().name
     results.append(check_linger(user))
