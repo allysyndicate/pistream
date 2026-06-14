@@ -3,9 +3,9 @@ package com.pistream.companion.ui
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.pistream.companion.data.BluetoothScanResult
 import com.pistream.companion.data.OperationActionResult
 import com.pistream.companion.data.PairingAttempt
+import com.pistream.companion.data.PhoneBluetoothScanner
 import com.pistream.companion.data.PiNetworkDiscoverer
 import com.pistream.companion.data.PiRepository
 import com.pistream.companion.domain.BluetoothDeviceModel
@@ -17,12 +17,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.onCompletion
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 class MainViewModel(
     private val repository: PiRepository,
     private val discoverer: PiNetworkDiscoverer,
+    private val bluetoothScanner: PhoneBluetoothScanner,
     private val clientInstanceId: String
 ) : ViewModel() {
     private val _state = MutableStateFlow(HomeUiState())
@@ -31,6 +34,7 @@ class MainViewModel(
     private var discoveryJob: Job? = null
     private var resumeJob: Job? = null
     private var postConnectSettleJob: Job? = null
+    private var bluetoothScanJob: Job? = null
 
     // Bounded retry policy for saved-token reconnect. Tuned for Wi-Fi handoff after a
     // screen-off / wake (~1-2s for DHCP) and short Pi API restarts (~3-4s for uvicorn
@@ -440,7 +444,7 @@ class MainViewModel(
     }
 
     fun startAssignSpeaker(speakerId: String, label: String) {
-        val dashboard = state.value.dashboard ?: return
+        if (state.value.dashboard == null) return
         _state.update {
             it.copy(
                 assignSpeaker = AssignSpeakerUiState(
@@ -450,11 +454,10 @@ class MainViewModel(
                 )
             )
         }
-        viewModelScope.launch { runBluetoothScanForAssign(dashboard) }
+        beginPhoneBluetoothScan()
     }
 
     fun rescanForAssign() {
-        val dashboard = state.value.dashboard ?: return
         val assign = state.value.assignSpeaker ?: return
         _state.update {
             it.copy(
@@ -466,7 +469,7 @@ class MainViewModel(
                 )
             )
         }
-        viewModelScope.launch { runBluetoothScanForAssign(dashboard) }
+        beginPhoneBluetoothScan()
     }
 
     fun selectDeviceForAssign(address: String) {
@@ -482,6 +485,7 @@ class MainViewModel(
         val assign = current.assignSpeaker ?: return
         val address = assign.selectedAddress ?: return
         val device = assign.devices.firstOrNull { it.address == address } ?: return
+        bluetoothScanJob?.cancel()
         _state.update {
             it.copy(
                 assignSpeaker = assign.copy(phase = AssignPhase.Assigning, message = null),
@@ -497,7 +501,7 @@ class MainViewModel(
                     displayName = device.name
                 )
             } catch (exception: Exception) {
-                OperationActionResult(exception.message ?: "Assign failed.")
+                OperationActionResult(exception.message ?: "Pair failed.")
             }
             _state.update { now ->
                 if (result.dashboard != null) {
@@ -508,11 +512,12 @@ class MainViewModel(
                         statusMessage = result.message.ifBlank { null }
                     )
                 } else {
+                    val assignNow = now.assignSpeaker ?: assign
                     now.copy(
                         isBusy = false,
-                        assignSpeaker = assign.copy(
+                        assignSpeaker = assignNow.copy(
                             phase = AssignPhase.ShowingDevices,
-                            message = result.message.ifBlank { "Assign failed." }
+                            message = friendlyAssignFailure(result.failureCode, result.message)
                         )
                     )
                 }
@@ -521,24 +526,161 @@ class MainViewModel(
     }
 
     fun cancelAssignSpeaker() {
+        bluetoothScanJob?.cancel()
+        bluetoothScanJob = null
         _state.update { it.copy(assignSpeaker = null) }
     }
 
-    private suspend fun runBluetoothScanForAssign(dashboard: DashboardModel) {
-        val result = try {
-            repository.scanBluetoothDevices(dashboard)
-        } catch (exception: Exception) {
-            BluetoothScanResult(exception.message ?: "Bluetooth scan failed.", null)
+    /**
+     * The Composable calls this after the runtime-permission launcher returns.
+     * If everything is granted, kick off the phone-side scan; otherwise demote
+     * to the Permission phase with the right "open Settings" hint.
+     */
+    fun onAssignPermissionResult(allGranted: Boolean, canAskAgain: Boolean) {
+        val assign = state.value.assignSpeaker ?: return
+        if (allGranted) {
+            _state.update {
+                it.copy(
+                    assignSpeaker = assign.copy(
+                        phase = AssignPhase.Scanning,
+                        missingPermissions = emptyList(),
+                        canRequestPermissions = true,
+                        message = null
+                    )
+                )
+            }
+            beginPhoneBluetoothScan()
+            return
         }
-        _state.update { current ->
-            val assign = current.assignSpeaker ?: return@update current
-            current.copy(
+        val missing = bluetoothScanner.missingPermissions()
+        _state.update {
+            it.copy(
                 assignSpeaker = assign.copy(
-                    phase = AssignPhase.ShowingDevices,
-                    devices = result.devices.orEmpty(),
-                    message = if (result.devices == null) result.message else null
+                    phase = AssignPhase.NeedsPermission,
+                    missingPermissions = missing,
+                    canRequestPermissions = canAskAgain,
+                    message = if (canAskAgain) {
+                        "Bluetooth access is needed to list speakers near you."
+                    } else {
+                        "Bluetooth access was permanently denied. Open Settings to grant it."
+                    }
                 )
             )
+        }
+    }
+
+    /** Composable signals that the user accepted the BT-enable system dialog. */
+    fun onBluetoothEnableResult(enabled: Boolean) {
+        val assign = state.value.assignSpeaker ?: return
+        if (enabled) {
+            _state.update {
+                it.copy(assignSpeaker = assign.copy(phase = AssignPhase.Scanning, message = null))
+            }
+            beginPhoneBluetoothScan()
+        } else {
+            _state.update {
+                it.copy(
+                    assignSpeaker = assign.copy(
+                        phase = AssignPhase.BluetoothOff,
+                        message = "Turn Bluetooth on to see nearby speakers."
+                    )
+                )
+            }
+        }
+    }
+
+    private fun beginPhoneBluetoothScan() {
+        bluetoothScanJob?.cancel()
+        if (!bluetoothScanner.isBluetoothSupported) {
+            _state.update {
+                val assign = it.assignSpeaker ?: return@update it
+                it.copy(
+                    assignSpeaker = assign.copy(
+                        phase = AssignPhase.ShowingDevices,
+                        devices = emptyList(),
+                        message = "This phone has no Bluetooth radio."
+                    )
+                )
+            }
+            return
+        }
+        val missing = bluetoothScanner.missingPermissions()
+        if (missing.isNotEmpty()) {
+            _state.update {
+                val assign = it.assignSpeaker ?: return@update it
+                it.copy(
+                    assignSpeaker = assign.copy(
+                        phase = AssignPhase.NeedsPermission,
+                        missingPermissions = missing,
+                        canRequestPermissions = true,
+                        message = null
+                    )
+                )
+            }
+            return
+        }
+        if (!bluetoothScanner.isBluetoothEnabled) {
+            _state.update {
+                val assign = it.assignSpeaker ?: return@update it
+                it.copy(
+                    assignSpeaker = assign.copy(
+                        phase = AssignPhase.BluetoothOff,
+                        message = null
+                    )
+                )
+            }
+            return
+        }
+        bluetoothScanJob = viewModelScope.launch {
+            // Seed bonded immediately so the user sees something while discovery
+            // ramps up. Empty list at start is normal — most users won't have
+            // paired the speaker to the phone.
+            val seeded = bluetoothScanner.bondedAudioSpeakers()
+            _state.update {
+                val assign = it.assignSpeaker ?: return@update it
+                it.copy(assignSpeaker = assign.copy(devices = seeded, message = null))
+            }
+            bluetoothScanner.discoverNearbyAudioSpeakers()
+                .catch { error ->
+                    _state.update {
+                        val assign = it.assignSpeaker ?: return@update it
+                        it.copy(
+                            assignSpeaker = assign.copy(
+                                phase = AssignPhase.ShowingDevices,
+                                message = error.message ?: "Bluetooth scan failed."
+                            )
+                        )
+                    }
+                }
+                .onCompletion {
+                    _state.update {
+                        val assign = it.assignSpeaker ?: return@update it
+                        if (assign.phase == AssignPhase.Scanning) {
+                            it.copy(assignSpeaker = assign.copy(phase = AssignPhase.ShowingDevices))
+                        } else it
+                    }
+                }
+                .collect { list ->
+                    _state.update {
+                        val assign = it.assignSpeaker ?: return@update it
+                        it.copy(assignSpeaker = assign.copy(devices = list))
+                    }
+                }
+        }
+    }
+
+    private fun friendlyAssignFailure(code: String?, message: String): String {
+        if (message.isBlank() && code == null) return "Pair failed."
+        return when (code) {
+            "pair_failed", "bonding_failed" ->
+                "The Pi could not pair with that speaker. Make sure it's in pairing mode and near the Pi."
+            "device_not_found", "device_unreachable", "out_of_range" ->
+                "The Pi cannot see that speaker on its own radio. Move it closer to the Pi."
+            "speaker_busy", "already_paired_elsewhere" ->
+                "That speaker is already connected to another device. Disconnect it there first."
+            "bluetooth_off", "adapter_off" ->
+                "The Pi's Bluetooth is off. Turn it on from the Pi and try again."
+            else -> message.ifBlank { "Pair failed." }
         }
     }
 
@@ -610,6 +752,7 @@ class MainViewModel(
         stopDiscovery()
         resumeJob?.cancel()
         postConnectSettleJob?.cancel()
+        bluetoothScanJob?.cancel()
         super.onCleared()
     }
 }
@@ -639,7 +782,7 @@ data class HomeUiState(
     val assignSpeaker: AssignSpeakerUiState? = null
 )
 
-enum class AssignPhase { Scanning, ShowingDevices, Assigning }
+enum class AssignPhase { NeedsPermission, BluetoothOff, Scanning, ShowingDevices, Assigning }
 
 data class AssignSpeakerUiState(
     val targetSpeakerId: String,
@@ -647,7 +790,9 @@ data class AssignSpeakerUiState(
     val phase: AssignPhase = AssignPhase.Scanning,
     val devices: List<BluetoothDeviceModel> = emptyList(),
     val selectedAddress: String? = null,
-    val message: String? = null
+    val message: String? = null,
+    val missingPermissions: List<String> = emptyList(),
+    val canRequestPermissions: Boolean = true
 )
 
 data class PairingUiState(
@@ -661,10 +806,11 @@ data class PairingUiState(
 class MainViewModelFactory(
     private val repository: PiRepository,
     private val discoverer: PiNetworkDiscoverer,
+    private val bluetoothScanner: PhoneBluetoothScanner,
     private val clientInstanceId: String
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
-        return MainViewModel(repository, discoverer, clientInstanceId) as T
+        return MainViewModel(repository, discoverer, bluetoothScanner, clientInstanceId) as T
     }
 }

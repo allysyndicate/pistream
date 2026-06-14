@@ -1,16 +1,40 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!--
-        Pi-owned Bluetooth: all speaker pairing, connect, and audio routing
-        happens on the Raspberry Pi via its HTTP API. The phone never scans for
-        or connects to Bluetooth speakers directly, so no BLUETOOTH_SCAN or
-        BLUETOOTH_CONNECT permission is requested. Network permissions cover
-        mDNS discovery (NsdManager) and the Pi REST API.
+        Phone-side Bluetooth: the assign-speaker flow now lists nearby speakers
+        on the PHONE (bonded + discoverable) before handing the chosen MAC to
+        the Pi to pair. Audio routing and the actual BlueZ pair/connect still
+        happens on the Pi; the phone only enumerates.
     -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <!-- Android 12+ (API 31+) Bluetooth runtime perms. neverForLocation
+         keeps the location prompt off the user; we only want speaker MACs. -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_SCAN"
+        android:usesPermissionFlags="neverForLocation"
+        tools:targetApi="31" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
+    <!-- Legacy Bluetooth perms for API 26-30. Pre-12, classic BT discovery
+         additionally requires ACCESS_FINE_LOCATION at runtime. -->
+    <uses-permission
+        android:name="android.permission.BLUETOOTH"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.BLUETOOTH_ADMIN"
+        android:maxSdkVersion="30" />
+    <uses-permission
+        android:name="android.permission.ACCESS_FINE_LOCATION"
+        android:maxSdkVersion="30" />
+
+    <uses-feature
+        android:name="android.hardware.bluetooth"
+        android:required="false" />
 
     <application
         android:name=".PiStreamApplication"

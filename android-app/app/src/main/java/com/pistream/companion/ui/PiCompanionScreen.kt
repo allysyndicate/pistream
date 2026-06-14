@@ -89,7 +89,12 @@ import com.pistream.companion.ui.theme.PiStreamTheme
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun PiCompanionScreen(viewModel: MainViewModel) {
+fun PiCompanionScreen(
+    viewModel: MainViewModel,
+    onRequestBluetoothPermissions: (List<String>) -> Unit = {},
+    onRequestEnableBluetooth: () -> Unit = {},
+    onOpenAppSettings: () -> Unit = {}
+) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     var overflowOpen by remember { mutableStateOf(false) }
@@ -170,7 +175,10 @@ fun PiCompanionScreen(viewModel: MainViewModel) {
             onCancelAssign = viewModel::cancelAssignSpeaker,
             onSelectAssignDevice = viewModel::selectDeviceForAssign,
             onConfirmAssign = viewModel::assignSelectedSpeaker,
-            onRescanAssign = viewModel::rescanForAssign
+            onRescanAssign = viewModel::rescanForAssign,
+            onGrantBluetoothPermissions = onRequestBluetoothPermissions,
+            onEnableBluetooth = onRequestEnableBluetooth,
+            onOpenAppSettings = onOpenAppSettings
         )
     }
 }
@@ -197,7 +205,10 @@ private fun HomeBody(
     onCancelAssign: () -> Unit,
     onSelectAssignDevice: (String) -> Unit,
     onConfirmAssign: () -> Unit,
-    onRescanAssign: () -> Unit
+    onRescanAssign: () -> Unit,
+    onGrantBluetoothPermissions: (List<String>) -> Unit,
+    onEnableBluetooth: () -> Unit,
+    onOpenAppSettings: () -> Unit
 ) {
     Box(
         modifier = Modifier
@@ -262,7 +273,10 @@ private fun HomeBody(
                 onCancel = onCancelAssign,
                 onSelectDevice = onSelectAssignDevice,
                 onConfirm = onConfirmAssign,
-                onRescan = onRescanAssign
+                onRescan = onRescanAssign,
+                onGrantPermissions = { onGrantBluetoothPermissions(assign.missingPermissions) },
+                onEnableBluetooth = onEnableBluetooth,
+                onOpenAppSettings = onOpenAppSettings
             )
         }
     }
@@ -1140,7 +1154,10 @@ private fun AssignSpeakerDialog(
     onCancel: () -> Unit,
     onSelectDevice: (String) -> Unit,
     onConfirm: () -> Unit,
-    onRescan: () -> Unit
+    onRescan: () -> Unit,
+    onGrantPermissions: () -> Unit,
+    onEnableBluetooth: () -> Unit,
+    onOpenAppSettings: () -> Unit
 ) {
     AlertDialog(
         onDismissRequest = {
@@ -1152,12 +1169,18 @@ private fun AssignSpeakerDialog(
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    "Pick a Bluetooth device the Pi can see. Pair it on the Pi first if it isn't listed.",
+                    "Pick a Bluetooth speaker near you. The Pi will pair with it next, so make sure the speaker is also near the Pi.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 when (state.phase) {
-                    AssignPhase.Scanning -> AssignScanningRow()
+                    AssignPhase.NeedsPermission -> AssignPermissionRow(
+                        canRequest = state.canRequestPermissions,
+                        onGrant = onGrantPermissions,
+                        onOpenSettings = onOpenAppSettings
+                    )
+                    AssignPhase.BluetoothOff -> AssignBluetoothOffRow(onEnable = onEnableBluetooth)
+                    AssignPhase.Scanning -> AssignScanningRow(devices = state.devices, onSelectDevice = onSelectDevice, selectedAddress = state.selectedAddress)
                     AssignPhase.Assigning -> AssignAssigningRow(label = state.targetLabel)
                     AssignPhase.ShowingDevices -> AssignDeviceList(
                         devices = state.devices,
@@ -1172,22 +1195,23 @@ private fun AssignSpeakerDialog(
                         color = MaterialTheme.colorScheme.error
                     )
                 }
-                if (state.phase == AssignPhase.ShowingDevices) {
+                if (state.phase == AssignPhase.ShowingDevices || state.phase == AssignPhase.Scanning) {
                     OutlinedButton(
                         onClick = onRescan,
                         shape = RoundedCornerShape(14.dp),
                         modifier = Modifier.fillMaxWidth(),
                         contentPadding = PaddingValues(vertical = 12.dp)
                     ) {
-                        Text("Rescan")
+                        Text(if (state.phase == AssignPhase.Scanning) "Restart scan" else "Rescan")
                     }
                 }
             }
         },
         confirmButton = {
-            val enabled = state.phase == AssignPhase.ShowingDevices && state.selectedAddress != null
+            val enabled = (state.phase == AssignPhase.ShowingDevices ||
+                state.phase == AssignPhase.Scanning) && state.selectedAddress != null
             TextButton(onClick = onConfirm, enabled = enabled) {
-                Text("Assign")
+                Text("Pair on Pi")
             }
         },
         dismissButton = {
@@ -1199,20 +1223,74 @@ private fun AssignSpeakerDialog(
 }
 
 @Composable
-private fun AssignScanningRow() {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp)
-    ) {
-        CircularProgressIndicator(
-            strokeWidth = 2.dp,
-            modifier = Modifier.size(18.dp),
-            color = MaterialTheme.colorScheme.primary
-        )
+private fun AssignPermissionRow(
+    canRequest: Boolean,
+    onGrant: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
         Text(
-            "Asking the Pi to scan Bluetooth...",
+            if (canRequest) {
+                "PiHouse needs Bluetooth access to list speakers near your phone. We never connect to them — the Pi handles audio."
+            } else {
+                "Bluetooth access was denied. Open app settings and grant Nearby devices to continue."
+            },
+            style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        PrimaryActionButton(
+            text = if (canRequest) "Grant Bluetooth access" else "Open app settings",
+            onClick = if (canRequest) onGrant else onOpenSettings,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+private fun AssignBluetoothOffRow(onEnable: () -> Unit) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text(
+            "Your phone's Bluetooth is off. Turn it on so we can list nearby speakers.",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        PrimaryActionButton(
+            text = "Turn on Bluetooth",
+            onClick = onEnable,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+private fun AssignScanningRow(
+    devices: List<BluetoothDeviceModel>,
+    selectedAddress: String?,
+    onSelectDevice: (String) -> Unit
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            CircularProgressIndicator(
+                strokeWidth = 2.dp,
+                modifier = Modifier.size(18.dp),
+                color = MaterialTheme.colorScheme.primary
+            )
+            Text(
+                if (devices.isEmpty()) "Looking for nearby speakers..."
+                else "Looking for more — pick when you see yours",
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        if (devices.isNotEmpty()) {
+            AssignDeviceList(
+                devices = devices,
+                selectedAddress = selectedAddress,
+                onSelectDevice = onSelectDevice
+            )
+        }
     }
 }
 
@@ -1242,7 +1320,7 @@ private fun AssignDeviceList(
 ) {
     if (devices.isEmpty()) {
         Text(
-            "No Bluetooth devices visible to the Pi. Tap Rescan after pairing one on the Pi.",
+            "No Bluetooth speakers were found near your phone. Put your speaker in pairing mode and tap Rescan.",
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
@@ -1290,7 +1368,7 @@ private fun AssignDeviceList(
                         )
                         val tags = buildList {
                             if (device.connected) add("Connected")
-                            if (device.paired) add("Paired")
+                            if (device.paired) add("Paired to phone")
                             if (device.trusted) add("Trusted")
                         }
                         if (tags.isNotEmpty()) {

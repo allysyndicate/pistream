@@ -10,6 +10,8 @@ class AppContainer(context: Context) {
 
     val discoverer = PiNetworkDiscoverer(context.applicationContext)
 
+    val bluetoothScanner = PhoneBluetoothScanner(context.applicationContext)
+
     val repository = PiRepository(
         apiClient = piApiClient,
         savedPiStore = savedPiStore,
