@@ -469,6 +469,86 @@ def test_select_route_compatibility_updates_speaker_systems() -> None:
         status_body = updated_status
 
 
+def test_non_uuid_client_request_id_returns_canonical_invalid_request() -> None:
+    # QA BUG #1: non-UUID clientRequestId previously bypassed Pydantic and hit
+    # ensure_uuid()'s ValueError, surfacing as a FastAPI 500 plain text. The
+    # OperationRequest field now carries a pattern so Pydantic rejects it at
+    # the boundary with the canonical {ok:false, error:{code,...}} envelope.
+    status_body = client.get("/api/v1/status", headers=AUTH).json()
+    payload = {
+        "clientRequestId": "not-a-uuid",
+        "observedBootId": status_body["reboot"]["bootId"],
+        "observedAt": status_body["observedAt"],
+        "speakerId": "indoor",
+    }
+    response = client.post("/api/v1/operations/reconnect", headers=AUTH, json=payload)
+    assert response.status_code == 400
+    body = response.json()
+    assert body["ok"] is False
+    assert body["error"]["code"] == "invalid_request"
+    assert body["error"]["details"]["field"] == "body.clientRequestId"
+
+
+def test_pair_speaker_rejects_kitchen_speaker_id_with_canonical_envelope() -> None:
+    # QA BUG #2: an unknown speakerId such as "kitchen" must be rejected at
+    # the Pydantic layer (SpeakerId is Literal["indoor","outdoor"]) with a
+    # canonical envelope, not silently accepted and then echoed back with a
+    # blank target.
+    status_body = client.get("/api/v1/status", headers=AUTH).json()
+    payload = {
+        "clientRequestId": str(uuid.uuid4()),
+        "observedBootId": status_body["reboot"]["bootId"],
+        "observedAt": status_body["observedAt"],
+        "speakerId": "kitchen",
+        "address": "AA:BB:CC:DD:EE:FF",
+        "displayName": "Anywhere",
+    }
+    response = client.post("/api/v1/operations/pair-speaker", headers=AUTH, json=payload)
+    assert response.status_code == 400
+    body = response.json()
+    assert body["ok"] is False
+    assert body["error"]["code"] == "invalid_request"
+    assert body["error"]["details"]["field"] == "body.speakerId"
+
+
+def test_unknown_path_returns_canonical_not_found_envelope() -> None:
+    # QA ROUTE-04: Starlette's router raises its own HTTPException with a
+    # plain-string detail for unknown routes. Without an explicit status-code
+    # handler the FastAPI HTTPException handler does not intercept it and the
+    # response leaves as {"detail":"Not Found"}, breaking Mobile's decoder.
+    response = client.get("/api/v1/this-route-does-not-exist", headers=AUTH)
+    assert response.status_code == 404
+    body = response.json()
+    assert body["ok"] is False
+    assert body["error"]["code"] == "not_found"
+    assert body["error"]["details"]["path"] == "/api/v1/this-route-does-not-exist"
+    assert body["observedAt"]
+
+
+def test_wrong_method_returns_canonical_method_not_allowed_envelope() -> None:
+    # QA ROUTE-05: same root cause as ROUTE-04 but for 405. The Allow header
+    # is preserved by the Starlette exception so we surface it in details.
+    response = client.post("/api/v1/status", headers=AUTH)
+    assert response.status_code == 405
+    body = response.json()
+    assert body["ok"] is False
+    assert body["error"]["code"] == "method_not_allowed"
+    assert body["error"]["details"]["method"] == "POST"
+    assert body["error"]["details"]["path"] == "/api/v1/status"
+    assert "GET" in body["error"]["details"]["allow"]
+
+
+def test_existing_404_handlers_still_emit_structured_envelope() -> None:
+    # Regression: the per-route HTTPException raised by GET /operations/{id}
+    # carries a dict detail with code="operation_not_found". The new global
+    # 404 handler must defer to that and not overwrite it with "not_found".
+    response = client.get("/api/v1/operations/op_does_not_exist", headers=AUTH)
+    assert response.status_code == 404
+    body = response.json()
+    assert body["error"]["code"] == "operation_not_found"
+    assert body["error"]["details"]["operationId"] == "op_does_not_exist"
+
+
 def test_config_without_adapter_mode_refuses_to_load() -> None:
     import json
     from pathlib import Path

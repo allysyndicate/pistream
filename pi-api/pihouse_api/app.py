@@ -73,6 +73,39 @@ def create_app() -> FastAPI:
             body = error_body("internal_error", "The request could not be completed.")
         return JSONResponse(status_code=exc.status_code, content=body, headers=exc.headers)
 
+    # Starlette's router raises its own HTTPException for unknown routes and
+    # for wrong methods on known routes (FastAPI's HTTPException handler does
+    # not catch them, so without these the responses bypass the canonical
+    # envelope and Mobile's decoder fails — QA ROUTE-04 / ROUTE-05).
+    @app.exception_handler(status.HTTP_404_NOT_FOUND)
+    async def not_found_handler(request: Request, exc: HTTPException) -> JSONResponse:
+        if isinstance(exc.detail, dict) and "code" in exc.detail:
+            body = error_body(exc.detail["code"], exc.detail["message"], exc.detail.get("details"))
+        else:
+            body = error_body(
+                "not_found",
+                "The requested resource was not found.",
+                {"path": request.url.path},
+            )
+        return JSONResponse(status_code=exc.status_code, content=body, headers=exc.headers)
+
+    @app.exception_handler(status.HTTP_405_METHOD_NOT_ALLOWED)
+    async def method_not_allowed_handler(request: Request, exc: HTTPException) -> JSONResponse:
+        if isinstance(exc.detail, dict) and "code" in exc.detail:
+            body = error_body(exc.detail["code"], exc.detail["message"], exc.detail.get("details"))
+        else:
+            allow = (exc.headers or {}).get("Allow", "")
+            body = error_body(
+                "method_not_allowed",
+                "The HTTP method is not allowed for this resource.",
+                {
+                    "method": request.method,
+                    "path": request.url.path,
+                    "allow": allow,
+                },
+            )
+        return JSONResponse(status_code=exc.status_code, content=body, headers=exc.headers)
+
     @app.exception_handler(RequestValidationError)
     async def validation_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
         first = exc.errors()[0] if exc.errors() else {}

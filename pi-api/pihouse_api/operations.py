@@ -23,6 +23,12 @@ OperationType = Literal[
 ]
 RouteRequestId = Literal["indoor", "outdoor", "both", "whole_house"]
 MAC_PATTERN = r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$"
+# Permissive RFC 4122 form: 8-4-4-4-12 hex with hyphens. Mobile sends UUIDv4
+# (UUID.randomUUID()), but the API accepts any hyphenated UUID so a future
+# client can use v7 without a wire break. Validated at the Pydantic layer so
+# malformed ids return a canonical 400 invalid_request envelope instead of
+# bubbling a ValueError into a 500 plain-text response (QA BUG #1).
+UUID_PATTERN = r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
 
 
 class OperationRecord(BaseModel):
@@ -87,7 +93,7 @@ class OperationStore:
 
 
 class OperationRequest(BaseModel):
-    clientRequestId: str
+    clientRequestId: str = Field(pattern=UUID_PATTERN)
     observedBootId: str
     observedAt: datetime
 
