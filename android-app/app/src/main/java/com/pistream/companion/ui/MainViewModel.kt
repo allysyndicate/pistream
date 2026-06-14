@@ -672,13 +672,14 @@ class MainViewModel(
     // Canonical pair-speaker failure vocabulary as emitted by pi-api adapters.py
     // (RealHardwareAdapter.pair_speaker_for_slot). `bluetooth_pair_failed` is the
     // umbrella for both pair-timeout and bond-rejection — Backend confirmed no
-    // separate `pair_timeout` or `bond_rejected` codes are emitted.
+    // separate `pair_timeout` or `bond_rejected` codes are emitted. `operation_failed`
+    // is the engine-side catch-all (operations.py:264-270) aliased to the same copy.
     private fun friendlyAssignFailure(code: String?, message: String): String {
         if (message.isBlank() && code == null) return "Pair failed."
         return when (code) {
             "unknown_bluetooth_device" ->
                 "The Pi can't see that speaker. Move it closer to the Pi and make sure it's in pairing mode."
-            "bluetooth_pair_failed" ->
+            "bluetooth_pair_failed", "operation_failed" ->
                 "Pairing didn't complete. Put the speaker back into pairing mode and try again."
             "bluetooth_connect_failed" ->
                 "Paired with the speaker, but couldn't connect for audio. Power-cycle the speaker and try again."
