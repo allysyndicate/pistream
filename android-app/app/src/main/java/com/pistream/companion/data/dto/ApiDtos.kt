@@ -252,7 +252,11 @@ data class OperationDto(
     val pollAfterMs: Long? = null,
     val message: String? = null,
     @SerialName("restartIssued")
-    val restartIssued: Boolean? = null
+    val restartIssued: Boolean? = null,
+    // 200 OK with status="failed" carries the wire failure code + human message
+    // in this block (see pi-api operations.py:257). Without it we'd lose the
+    // real code on the synchronous pair-speaker failure path.
+    val error: ApiErrorDto? = null
 )
 
 @Serializable

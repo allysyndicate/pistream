@@ -252,19 +252,20 @@ class PiRepository(
                     )
                 } else {
                     // 200 OK with status=failed means the Pi attempted the bond/connect chain and
-                    // it failed. Surface op.message to the UI; the dashboard's settle-poll on the
-                    // *next* user action will clear stale state — no refresh here so the dialog
-                    // can stay open on the failed selection.
+                    // it failed. The real wire code lives in op.error.code (set by pi-api
+                    // operations.py when an AdapterCommandError is raised); fall back to
+                    // bluetooth_pair_failed only if the envelope is unexpectedly empty.
                     OperationActionResult(
-                        message = op.message?.takeIf { it.isNotBlank() }
+                        message = op.error?.message?.takeIf { it.isNotBlank() }
+                            ?: op.message?.takeIf { it.isNotBlank() }
                             ?: "Pair failed (${op.operationId}).",
-                        failureCode = "bluetooth_pair_failed"
+                        failureCode = op.error?.code ?: "bluetooth_pair_failed"
                     )
                 }
             }
             is ApiCallResult.Failure -> OperationActionResult(
                 message = result.message,
-                failureCode = collapsePairFailureCode(result.code)
+                failureCode = result.code
             )
         }
     }
@@ -318,12 +319,6 @@ sealed interface PairingAttempt {
     data class Transient(val detail: String) : PairingAttempt
     data class Failed(val message: String) : PairingAttempt
 }
-
-// Backend's contract bucket: a Bluetooth bond rejection (PIN mismatch / link-key
-// failure) is reported as `bond_rejected`. The legacy `auth_failed` code from the
-// older endpoint is folded into the same bucket so the UI can show one message.
-private fun collapsePairFailureCode(code: String): String =
-    if (code == "auth_failed") "bond_rejected" else code
 
 private fun DashboardModel.operationRequest(
     speakerId: String? = null,
