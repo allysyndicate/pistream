@@ -119,11 +119,23 @@ class SetSpeakerSystemsRequest(OperationRequest):
 
 
 class PairSpeakerRequest(OperationRequest):
+    # The pair op is now the single combined "pair + trust + connect + assign +
+    # restart audio" call from the Android speaker-assign UI, so the slot it is
+    # being paired into is part of the request body.
+    speakerId: SpeakerId
     address: str = Field(pattern=MAC_PATTERN)
+    displayName: str | None = Field(default=None, max_length=40)
 
     @property
     def canonical_address(self) -> str:
         return self.address.upper()
+
+    @property
+    def canonical_display_name(self) -> str | None:
+        if self.displayName is None:
+            return None
+        cleaned = self.displayName.strip()
+        return cleaned or None
 
 
 class AssignSpeakerRequest(OperationRequest):
@@ -177,7 +189,11 @@ def target_for(operation_type: OperationType, request: OperationRequest) -> dict
     if operation_type == "set_speaker_systems":
         return {"enabledSystemIds": getattr(request, "canonical_enabled_system_ids")}
     if operation_type == "pair_speaker":
-        return {"address": getattr(request, "canonical_address")}
+        return {
+            "speakerId": getattr(request, "speakerId"),
+            "address": getattr(request, "canonical_address"),
+            "displayName": getattr(request, "canonical_display_name"),
+        }
     if operation_type == "assign_speaker":
         return {
             "speakerId": getattr(request, "speakerId"),
@@ -224,7 +240,11 @@ def create_operation(
         elif operation_type == "set_speaker_systems":
             record.result = adapter.set_speaker_systems(getattr(request, "canonical_enabled_system_ids"))
         elif operation_type == "pair_speaker":
-            record.result = adapter.pair_speaker(getattr(request, "canonical_address"))
+            record.result = adapter.pair_speaker_for_slot(
+                getattr(request, "speakerId"),
+                getattr(request, "canonical_address"),
+                getattr(request, "canonical_display_name"),
+            )
         elif operation_type == "assign_speaker":
             record.result = adapter.assign_speaker(
                 getattr(request, "speakerId"),

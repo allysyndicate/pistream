@@ -457,6 +457,86 @@ def test_assign_unknown_device_raises(adapter: RealHardwareAdapter) -> None:
     assert excinfo.value.code == "unknown_bluetooth_device"
 
 
+def test_pair_speaker_for_slot_scans_pairs_and_assigns(
+    adapter: RealHardwareAdapter, hardware: FakeHardware, tmp_path
+) -> None:
+    hardware.discoverable[NEW_MAC] = "New Patio Speaker"
+    new_sink = "bluez_output.DE_AD_BE_EF_00_01.1"
+    hardware.sinks.append(new_sink)
+
+    result = adapter.pair_speaker_for_slot("outdoor", NEW_MAC, "Patio")
+
+    assert result["address"] == NEW_MAC
+    assert result["speakerId"] == "outdoor"
+    assert result["displayName"] == "Patio"
+    assert result["paired"] is True
+    assert result["connected"] is True
+    assert result["pairIssued"] is True
+    assert result["assignmentIssued"] is True
+    assert result["adapterMode"] == "real"
+
+    # Inline 8s scan ran before anything else.
+    assert ["bluetoothctl", "--timeout", "8", "scan", "on"] in hardware.calls
+    # Slot assignment really happened.
+    assert adapter._speaker_mac("outdoor") == NEW_MAC
+    # Audio reconfigure happened (env file rewritten + pipewire restarted).
+    env_text = (tmp_path / "librespot" / "outdoor.env").read_text(encoding="utf-8")
+    assert "SPEAKER_NAME=Patio" in env_text
+    assert ["systemctl", "--user", "restart", "pipewire"] in hardware.calls
+
+
+def test_pair_speaker_for_slot_rejects_unknown_device(
+    adapter: RealHardwareAdapter, hardware: FakeHardware
+) -> None:
+    # NEW_MAC is not in the FakeHardware discoverable set, so the inline scan
+    # cannot promote it into known_devices and the conflict check is bypassed.
+    with pytest.raises(AdapterCommandError) as excinfo:
+        adapter.pair_speaker_for_slot("outdoor", NEW_MAC, None)
+    assert excinfo.value.code == "unknown_bluetooth_device"
+
+
+def test_pair_speaker_for_slot_already_paired_to_other_slot(
+    adapter: RealHardwareAdapter, hardware: FakeHardware
+) -> None:
+    # Pre-seed: NEW_MAC already assigned to indoor. Trying to pair-into
+    # outdoor with the same MAC must refuse before touching BlueZ.
+    hardware.discoverable[NEW_MAC] = "Shared Speaker"
+    new_sink = "bluez_output.DE_AD_BE_EF_00_01.1"
+    hardware.sinks.append(new_sink)
+    adapter.pair_speaker_for_slot("indoor", NEW_MAC, "Living Room")
+    pre_call_count = len(hardware.calls)
+
+    with pytest.raises(AdapterCommandError) as excinfo:
+        adapter.pair_speaker_for_slot("outdoor", NEW_MAC, "Patio")
+    assert excinfo.value.code == "already_paired_to_other_slot"
+    # Conflict check fired before the inline scan, so no extra BlueZ calls
+    # were issued after the precondition rejected the request.
+    assert hardware.calls[pre_call_count:] == []
+
+
+def test_pair_speaker_for_slot_pair_failure_surfaces(
+    adapter: RealHardwareAdapter, hardware: FakeHardware
+) -> None:
+    hardware.discoverable[NEW_MAC] = "Stubborn Speaker"
+    hardware.fail_pair.add(NEW_MAC)
+    with pytest.raises(AdapterCommandError) as excinfo:
+        adapter.pair_speaker_for_slot("outdoor", NEW_MAC, None)
+    assert excinfo.value.code == "bluetooth_pair_failed"
+
+
+def test_pair_speaker_for_slot_pi_busy_when_lock_held(
+    adapter: RealHardwareAdapter, hardware: FakeHardware
+) -> None:
+    hardware.discoverable[NEW_MAC] = "Reentrant Speaker"
+    adapter._pair_lock.acquire()
+    try:
+        with pytest.raises(AdapterCommandError) as excinfo:
+            adapter.pair_speaker_for_slot("outdoor", NEW_MAC, None)
+        assert excinfo.value.code == "pi_busy"
+    finally:
+        adapter._pair_lock.release()
+
+
 def test_unassigned_speaker_reports_unassigned(hardware: FakeHardware, tmp_path) -> None:
     data = real_config_data()
     data["speakers"]["indoor"]["mac"] = None

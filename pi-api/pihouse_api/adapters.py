@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -188,6 +189,44 @@ class StubHardwareAdapter:
             raise AdapterCommandError("bluetooth_pair_failed", "This Bluetooth device is not visible to the Pi.")
         device.update(paired=True, trusted=True, connected=True)
         return {"address": mac, "name": device["name"], "paired": True, "trusted": True, "connected": True, "adapterMode": "stub"}
+
+    def pair_speaker_for_slot(
+        self,
+        speaker_id: SpeakerId,
+        address: str,
+        display_name: str | None,
+    ) -> dict:
+        mac = canonical_mac(address)
+        for other_slot in SYSTEM_ORDER:
+            if other_slot == speaker_id:
+                continue
+            existing = self.assignments.get(other_slot)
+            if existing and existing.get("mac") == mac:
+                raise AdapterCommandError(
+                    "already_paired_to_other_slot",
+                    f"This Bluetooth device is already paired to the {other_slot} slot. Unassign it there first.",
+                )
+        device = self.devices.get(mac)
+        if device is None:
+            raise AdapterCommandError(
+                "unknown_bluetooth_device",
+                "This Bluetooth device is not visible to the Pi.",
+            )
+        device.update(paired=True, trusted=True, connected=True)
+        record = self.assignments.set(speaker_id, mac, display_name)
+        return {
+            "speakerId": speaker_id,
+            "address": mac,
+            "displayName": record["displayName"],
+            "sinkName": bluez_sink_prefix(mac) + ".1",
+            "name": device["name"],
+            "paired": True,
+            "trusted": True,
+            "connected": True,
+            "pairIssued": True,
+            "assignmentIssued": True,
+            "adapterMode": "stub",
+        }
 
     def assign_speaker(self, speaker_id: SpeakerId, address: str, display_name: str | None = None) -> dict:
         mac = canonical_mac(address)
@@ -376,6 +415,17 @@ class RealHardwareAdapter:
         self._cache: dict[object, tuple[float, object]] = {}
         self._last_changed_at: str | None = None
         self._desired_system_ids: set[SpeakerId] | None = self._load_desired()
+        # Combined pair flow holds this lock for its full duration (multi-second
+        # bluetoothctl pair/trust/connect + systemctl restart chain). A second
+        # concurrent pair request rejects with pi_busy instead of racing BlueZ.
+        self._pair_lock = threading.Lock()
+        # Best-effort: surface a default agent so "Just Works" speakers can be
+        # paired without an interactive bluetoothctl session. These spawn a
+        # short-lived bluetoothctl process; agent state does not persist across
+        # processes, but a registered default-agent on the system bus reduces
+        # the chance that the next `bluetoothctl pair` falls back to no-agent.
+        self.runner(["bluetoothctl", "agent", "on"], 5.0)
+        self.runner(["bluetoothctl", "default-agent"], 5.0)
 
     def _load_desired(self) -> set[SpeakerId] | None:
         if self.state_path is None or not self.state_path.exists():
@@ -552,6 +602,107 @@ class RealHardwareAdapter:
             **flags,
             "adapterMode": "real",
         }
+
+    def pair_speaker_for_slot(
+        self,
+        speaker_id: SpeakerId,
+        address: str,
+        display_name: str | None,
+    ) -> dict:
+        """Single atomic op: 8s scan -> conflict check -> pair/trust/connect ->
+        assign slot -> rewrite librespot env -> restart pipewire/wireplumber +
+        any running endpoint that uses this slot.
+
+        Failure-code vocabulary surfaced through AdapterCommandError:
+          - pi_busy: another combined-pair is in flight
+          - already_paired_to_other_slot: MAC is already assigned to the OTHER
+            slot, refuse so the operator does not silently steal the other
+            zone's speaker
+          - unknown_bluetooth_device: MAC was not visible after the inline scan
+          - bluetooth_pair_failed: pair step did not finish (Just Works
+            unavailable, speaker not in pairing mode, BlueZ busy, etc.)
+          - bluetooth_connect_failed: pair succeeded but post-pair connect did
+            not bring the speaker online
+          - speaker_assignment_apply_failed: pair+assign succeeded but
+            pipewire/wireplumber/endpoint services failed to restart
+        """
+        mac = canonical_mac(address)
+        if not self._pair_lock.acquire(blocking=False):
+            raise AdapterCommandError(
+                "pi_busy",
+                "Another pair-speaker operation is already running on this Pi. Retry in a few seconds.",
+            )
+        try:
+            # Pre-pair slot-conflict check: refuse to silently re-home a MAC
+            # that the operator has already assigned to the *other* slot.
+            for other_slot in SYSTEM_ORDER:
+                if other_slot == speaker_id:
+                    continue
+                existing = self.assignments.get(other_slot)
+                if existing and existing.get("mac") == mac:
+                    raise AdapterCommandError(
+                        "already_paired_to_other_slot",
+                        f"This Bluetooth device is already paired to the {other_slot} slot. Unassign it there first.",
+                    )
+
+            # Inline 8s discovery window before pair, so callers do not need a
+            # separate /bluetooth/devices?scanSeconds=N round trip. bluetoothctl
+            # --timeout exits when the window ends, so we cap the runner above
+            # that to avoid a spurious timed_out.
+            self.runner(["bluetoothctl", "--timeout", "8", "scan", "on"], 18.0)
+            self._invalidate()
+
+            if mac not in self._known_devices():
+                raise AdapterCommandError(
+                    "unknown_bluetooth_device",
+                    "This Bluetooth device is not visible to the Pi. Put it in pairing mode and retry.",
+                )
+
+            info = self.runner(["bluetoothctl", "info", mac], self.COMMAND_TIMEOUT)
+            already_paired = self._parse_bluetoothctl_info(info.stdout)["paired"]
+            if not already_paired:
+                pair = self.runner(["bluetoothctl", "--timeout", "30", "pair", mac], 40.0)
+                if not pair.ok and "already" not in pair.stderr.lower():
+                    raise AdapterCommandError(
+                        "bluetooth_pair_failed",
+                        "Pairing failed. Put the speaker in pairing mode and retry.",
+                    )
+            self.runner(["bluetoothctl", "trust", mac], self.COMMAND_TIMEOUT)
+            self.runner(["bluetoothctl", "connect", mac], self.BLUETOOTH_TIMEOUT)
+            self._invalidate()
+
+            info = self.runner(["bluetoothctl", "info", mac], self.COMMAND_TIMEOUT)
+            flags = self._parse_bluetoothctl_info(info.stdout)
+            if not flags["paired"]:
+                raise AdapterCommandError(
+                    "bluetooth_pair_failed",
+                    "Pairing did not complete. Put the speaker in pairing mode and retry.",
+                )
+            if not flags["connected"]:
+                raise AdapterCommandError(
+                    "bluetooth_connect_failed",
+                    "The speaker paired but did not connect. Power-cycle it and retry.",
+                )
+
+            # Slot assignment + audio reconfigure. assign_speaker raises
+            # speaker_assignment_apply_failed itself if pipewire/wireplumber/
+            # endpoint services can't restart, so we let it propagate.
+            assign_result = self.assign_speaker(speaker_id, mac, display_name)
+            return {
+                "speakerId": speaker_id,
+                "address": mac,
+                "displayName": assign_result["displayName"],
+                "sinkName": assign_result["sinkName"],
+                "name": self._known_devices().get(mac) or None,
+                "paired": flags["paired"],
+                "trusted": flags["trusted"],
+                "connected": flags["connected"],
+                "pairIssued": True,
+                "assignmentIssued": True,
+                "adapterMode": "real",
+            }
+        finally:
+            self._pair_lock.release()
 
     def _sink_name_for_mac(self, mac: str) -> str:
         prefix = bluez_sink_prefix(mac)

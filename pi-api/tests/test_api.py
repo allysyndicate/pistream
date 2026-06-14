@@ -324,21 +324,41 @@ def test_bluetooth_devices_lists_pi_visible_devices() -> None:
     assert {"address", "name", "paired", "trusted", "connected"} <= set(sample)
 
 
-def test_pair_speaker_operation() -> None:
+def test_pair_speaker_operation_assigns_slot_in_one_call() -> None:
     status_body = client.get("/api/v1/status", headers=AUTH).json()
     payload = {
         "clientRequestId": str(uuid.uuid4()),
         "observedBootId": status_body["reboot"]["bootId"],
         "observedAt": status_body["observedAt"],
+        "speakerId": "indoor",
         "address": "77:88:99:aa:bb:cc",
+        "displayName": "Patio",
     }
     accepted = client.post("/api/v1/operations/pair-speaker", headers=AUTH, json=payload)
     assert accepted.status_code == 202
     operation = accepted.json()["operation"]
     assert operation["type"] == "pair_speaker"
-    assert operation["target"] == {"address": "77:88:99:AA:BB:CC"}
+    assert operation["target"] == {
+        "speakerId": "indoor",
+        "address": "77:88:99:AA:BB:CC",
+        "displayName": "Patio",
+    }
     assert operation["status"] == "succeeded"
-    assert operation["result"]["paired"] is True
+    result = operation["result"]
+    assert result["paired"] is True
+    assert result["connected"] is True
+    assert result["speakerId"] == "indoor"
+    assert result["address"] == "77:88:99:AA:BB:CC"
+    assert result["displayName"] == "Patio"
+    assert result["pairIssued"] is True
+    assert result["assignmentIssued"] is True
+
+    # The slot assignment must reflect in /status on the next poll, which is
+    # what clears the speaker_unassigned banner in the app.
+    updated_status = client.get("/api/v1/status", headers=AUTH).json()
+    indoor = next(item for item in updated_status["speakers"] if item["speakerId"] == "indoor")
+    assert indoor["address"] == "77:88:99:AA:BB:CC"
+    assert indoor["displayName"] == "Patio"
 
 
 def test_pair_speaker_rejects_malformed_address() -> None:
@@ -347,7 +367,35 @@ def test_pair_speaker_rejects_malformed_address() -> None:
         "clientRequestId": str(uuid.uuid4()),
         "observedBootId": status_body["reboot"]["bootId"],
         "observedAt": status_body["observedAt"],
+        "speakerId": "indoor",
         "address": "not-a-mac; rm -rf /",
+    }
+    response = client.post("/api/v1/operations/pair-speaker", headers=AUTH, json=payload)
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
+
+
+def test_pair_speaker_requires_speaker_id() -> None:
+    status_body = client.get("/api/v1/status", headers=AUTH).json()
+    payload = {
+        "clientRequestId": str(uuid.uuid4()),
+        "observedBootId": status_body["reboot"]["bootId"],
+        "observedAt": status_body["observedAt"],
+        "address": "77:88:99:AA:BB:CC",
+    }
+    response = client.post("/api/v1/operations/pair-speaker", headers=AUTH, json=payload)
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "invalid_request"
+
+
+def test_pair_speaker_rejects_unknown_slot() -> None:
+    status_body = client.get("/api/v1/status", headers=AUTH).json()
+    payload = {
+        "clientRequestId": str(uuid.uuid4()),
+        "observedBootId": status_body["reboot"]["bootId"],
+        "observedAt": status_body["observedAt"],
+        "speakerId": "garage",
+        "address": "77:88:99:AA:BB:CC",
     }
     response = client.post("/api/v1/operations/pair-speaker", headers=AUTH, json=payload)
     assert response.status_code == 400
