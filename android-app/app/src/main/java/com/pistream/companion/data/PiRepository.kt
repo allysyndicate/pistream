@@ -227,14 +227,6 @@ class PiRepository(
         }
     }
 
-    suspend fun pairSpeaker(dashboard: DashboardModel, address: String): OperationActionResult {
-        val request = dashboard.operationRequest(address = address)
-        return when (val result = apiClient.pairSpeaker(piBaseUrl(dashboard.host), tokenStore.loadToken(), request)) {
-            is ApiCallResult.Success -> operationStateMessage(dashboard, "Pair", result.value)
-            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}", failureCode = result.code)
-        }
-    }
-
     suspend fun assignSpeaker(
         dashboard: DashboardModel,
         speakerId: String,
@@ -246,9 +238,34 @@ class PiRepository(
             address = address,
             displayName = displayName?.trim()?.takeIf { it.isNotEmpty() }
         )
-        return when (val result = apiClient.assignSpeaker(piBaseUrl(dashboard.host), tokenStore.loadToken(), request)) {
-            is ApiCallResult.Success -> operationStateMessage(dashboard, "Assign", result.value)
-            is ApiCallResult.Failure -> OperationActionResult("${result.code}: ${result.message}", failureCode = result.code)
+        return when (val result = apiClient.pairSpeaker(piBaseUrl(dashboard.host), tokenStore.loadToken(), request)) {
+            is ApiCallResult.Success -> {
+                // Pair-speaker is synchronous: the first response already carries terminal status.
+                // No polling — GET /operations/{id} is retry-safety only per the locked contract.
+                val op = result.value
+                if (op.status == "succeeded") {
+                    val refreshed = refresh(dashboard)
+                    refreshed.copy(
+                        message = listOf("Pair succeeded: ${op.operationId}", refreshed.message)
+                            .filter { it.isNotBlank() }
+                            .joinToString("\n")
+                    )
+                } else {
+                    // 200 OK with status=failed means the Pi attempted the bond/connect chain and
+                    // it failed. Surface op.message to the UI; the dashboard's settle-poll on the
+                    // *next* user action will clear stale state — no refresh here so the dialog
+                    // can stay open on the failed selection.
+                    OperationActionResult(
+                        message = op.message?.takeIf { it.isNotBlank() }
+                            ?: "Pair failed (${op.operationId}).",
+                        failureCode = "bluetooth_pair_failed"
+                    )
+                }
+            }
+            is ApiCallResult.Failure -> OperationActionResult(
+                message = result.message,
+                failureCode = collapsePairFailureCode(result.code)
+            )
         }
     }
 
@@ -301,6 +318,12 @@ sealed interface PairingAttempt {
     data class Transient(val detail: String) : PairingAttempt
     data class Failed(val message: String) : PairingAttempt
 }
+
+// Backend's contract bucket: a Bluetooth bond rejection (PIN mismatch / link-key
+// failure) is reported as `bond_rejected`. The legacy `auth_failed` code from the
+// older endpoint is folded into the same bucket so the UI can show one message.
+private fun collapsePairFailureCode(code: String): String =
+    if (code == "auth_failed") "bond_rejected" else code
 
 private fun DashboardModel.operationRequest(
     speakerId: String? = null,

@@ -669,17 +669,29 @@ class MainViewModel(
         }
     }
 
+    // Backend's locked pair-speaker failure vocabulary. `auth_failed` is collapsed into
+    // `bond_rejected` in PiRepository before reaching here, so it's intentionally absent.
     private fun friendlyAssignFailure(code: String?, message: String): String {
         if (message.isBlank() && code == null) return "Pair failed."
         return when (code) {
-            "pair_failed", "bonding_failed" ->
-                "The Pi could not pair with that speaker. Make sure it's in pairing mode and near the Pi."
-            "device_not_found", "device_unreachable", "out_of_range" ->
-                "The Pi cannot see that speaker on its own radio. Move it closer to the Pi."
-            "speaker_busy", "already_paired_elsewhere" ->
-                "That speaker is already connected to another device. Disconnect it there first."
-            "bluetooth_off", "adapter_off" ->
-                "The Pi's Bluetooth is off. Turn it on from the Pi and try again."
+            "not_in_range" ->
+                "The Pi can't see that speaker. Move it closer to the Pi and make sure it's in pairing mode."
+            "pair_timeout" ->
+                "Pairing took too long. Put the speaker back into pairing mode and try again."
+            "bond_rejected" ->
+                "The speaker refused the pairing request. Reset its Bluetooth memory and try again."
+            "bluetooth_connect_failed" ->
+                "Paired with the speaker, but couldn't connect for audio. Try again."
+            "already_paired_to_other_slot" ->
+                "This speaker is already assigned to the other slot. Unassign it there first."
+            "pi_busy" ->
+                "The Pi is busy with another operation. Try again in a moment."
+            "boot_changed", "stale_observation" ->
+                "Pi state changed since the speaker list loaded. Refresh status and try again."
+            "invalid_request" ->
+                message.ifBlank { "The Pi rejected the pair request as invalid." }
+            "bluetooth_pair_failed" ->
+                message.ifBlank { "The Pi tried to pair but the speaker did not respond. Try again." }
             else -> message.ifBlank { "Pair failed." }
         }
     }

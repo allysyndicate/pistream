@@ -15,6 +15,7 @@ import io.ktor.client.call.body
 import io.ktor.client.engine.android.Android
 import io.ktor.client.plugins.HttpTimeout
 import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.get
 import io.ktor.client.request.post
@@ -114,12 +115,11 @@ class PiApiClient {
         return ApiCallResult.Success(response.body())
     }
 
+    // Pair-speaker is synchronous on the Pi (scan + bond + connect + audio restart can
+    // run up to ~90s before the first response). The default 60s request timeout would
+    // cut a successful pair short, so override per-call.
     suspend fun pairSpeaker(baseUrl: String, token: String, body: OperationRequestDto): ApiCallResult<OperationDto> {
-        return postOperation("$baseUrl/operations/pair-speaker", token, body)
-    }
-
-    suspend fun assignSpeaker(baseUrl: String, token: String, body: OperationRequestDto): ApiCallResult<OperationDto> {
-        return postOperation("$baseUrl/operations/assign-speaker", token, body)
+        return postOperation("$baseUrl/operations/pair-speaker", token, body, requestTimeoutMillis = 90_000L)
     }
 
     suspend fun operation(baseUrl: String, token: String, operationId: String): ApiCallResult<OperationDto> {
@@ -135,12 +135,19 @@ class PiApiClient {
     private suspend fun postOperation(
         url: String,
         token: String,
-        body: Any
+        body: Any,
+        requestTimeoutMillis: Long? = null
     ): ApiCallResult<OperationDto> {
         val response = client.post(url) {
             bearerAuth(token)
             contentType(ContentType.Application.Json)
             setBody(body)
+            if (requestTimeoutMillis != null) {
+                timeout {
+                    this.requestTimeoutMillis = requestTimeoutMillis
+                    socketTimeoutMillis = requestTimeoutMillis
+                }
+            }
         }
         if (!response.status.isSuccess()) {
             // 409 distinguishes `boot_changed` from `stale_observation` in the body.
