@@ -116,11 +116,35 @@ def _resolve_path(path_value: str, config_path: Path) -> Path:
     return (config_path.parent / path).resolve()
 
 
+def _config_candidates() -> list[Path]:
+    # Deterministic, repo-relative search order. Every candidate is made
+    # absolute against the package ROOT (never the process CWD) so the loader
+    # behaves identically regardless of how the service is launched.
+    candidates: list[Path] = []
+    env_value = os.environ.get("PIHOUSE_CONFIG", "").strip()
+    if env_value:
+        env_path = Path(env_value).expanduser()
+        if not env_path.is_absolute():
+            env_path = ROOT / env_path
+        candidates.append(env_path.resolve())
+    # Operator-supplied real config dropped next to the package, no env var needed.
+    candidates.append((ROOT / "config.json").resolve())
+    # Bundled default, always shipped with the package. Last-resort fallback so a
+    # deploy that has not been fully provisioned still starts and serves instead
+    # of crash-looping under systemd Restart=always.
+    candidates.append((ROOT / "config.example.json").resolve())
+    return candidates
+
+
 def load_config() -> AppConfig:
-    raw_path = os.environ.get("PIHOUSE_CONFIG", str(ROOT / "config.example.json"))
-    config_path = Path(raw_path).resolve()
-    with config_path.open("r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    config = AppConfig.model_validate(data)
-    config.tokenFile = str(_resolve_path(config.tokenFile, config_path))
-    return config
+    candidates = _config_candidates()
+    for config_path in candidates:
+        if not config_path.is_file():
+            continue
+        with config_path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        config = AppConfig.model_validate(data)
+        config.tokenFile = str(_resolve_path(config.tokenFile, config_path))
+        return config
+    searched = ", ".join(str(path) for path in candidates)
+    raise FileNotFoundError(f"no pihouse-api config found; searched: {searched}")
